@@ -12,7 +12,7 @@ module tt_um_example (
     // Router top module signals
     wire vldout_0, vldout_1, vldout_2;
     wire err, busy;
-    wire [7:0] data_out_1, data_out_2;
+	wire [7:0] data_out_0,data_out_1, data_out_2;
     
     // Input mapping from ui_in
     wire packet_valid = ui_in[0];
