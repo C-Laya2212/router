@@ -336,7 +336,7 @@ module tb();
     // Dump waveforms
     initial begin
         $dumpfile("router_tb.vcd");
-        $dumpvars(0, tb_tt_um_example);
+        $dumpvars(0, tb);
     end
 
 endmodule
