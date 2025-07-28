@@ -12,7 +12,7 @@ module tt_um_example (
     // Router top module signals
     wire vldout_0, vldout_1, vldout_2;
     wire err, busy;
-    wire [7:0] data_out_0, data_out_1, data_out_2;
+    wire [7:0] data_out_1, data_out_2;
     
     // Input mapping from ui_in
     wire packet_valid = ui_in[0];
@@ -497,7 +497,7 @@ if(incrementer==0)      //nothing in fifo
   else
   empty = 0;
 
-  if(incrementer==4'b1111)  // fifo is full
+	if(incrementer==5'b01111)  // fifo is full
    full = 1;
    else
    full = 0;
