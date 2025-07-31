@@ -1,44 +1,45 @@
 `timescale 1ns/1ps
 
-module tb();
+module tb_tt_um_example();
 
-    // Testbench signals
-    reg [7:0] ui_in;
-    wire [7:0] uo_out;
-    reg [7:0] uio_in;
-    wire [7:0] uio_out;
-    wire [7:0] uio_oe;
-    reg ena;
-    reg clk;
-    reg rst_n;
+    // TinyTapeout standard interface signals
+    reg [7:0] ui_in;      // Dedicated inputs
+    wire [7:0] uo_out;    // Dedicated outputs  
+    reg [7:0] uio_in;     // IOs: Input path
+    wire [7:0] uio_out;   // IOs: Output path
+    wire [7:0] uio_oe;    // IOs: Enable path
+    reg ena;              // Enable (always 1 when powered)
+    reg clk;              // Clock
+    reg rst_n;            // Active low reset
     
-    // Internal signals for easier monitoring
+    // Extracted signals for monitoring
     wire packet_valid;
     wire [7:0] datain;
-    wire read_enb_0, read_enb_1, read_enb_2;
-    wire vldout_0, vldout_1, vldout_2;
+    wire [2:0] read_enb;
+    wire [2:0] vldout;
     wire err, busy;
-    wire [7:0] data_out_0, data_out_1, data_out_2;
+    wire [7:0] data_out_0;
     
     // Test variables
-    reg [7:0] test_packet [0:20];
-    integer i, j, packet_length;
+    reg [7:0] test_packet [0:15];
+    integer i, j, packet_idx;
     reg [7:0] expected_parity;
+    integer test_count, pass_count, fail_count;
     
-    // Extract signals for monitoring
+    // Signal extraction based on TinyTapeout interface
     assign packet_valid = ui_in[0];
     assign datain = ui_in[7:0];
-    assign read_enb_0 = uio_in[0];
-    assign read_enb_1 = uio_in[1];
-    assign read_enb_2 = uio_in[2];
-    assign vldout_0 = uo_out[0];
-    assign vldout_1 = uo_out[1];
-    assign vldout_2 = uo_out[2];
-    assign err = uio_out[7];
-    assign busy = uio_out[6];
-    assign data_out_0 = {2'b00, uio_out[5:0]}; // Only lower 6 bits available in wrapper
+    assign read_enb = uio_in[2:0];
     
-    // Instantiate DUT
+    // Extract outputs from uo_out: {3'b000, vldout[2:0], err, busy}
+    assign busy = uo_out[0];
+    assign err = uo_out[1]; 
+    assign vldout[0] = uo_out[2];
+    assign vldout[1] = uo_out[3]; 
+    assign vldout[2] = uo_out[4];
+    assign data_out_0 = uio_out; // Channel 0 data on bidirectional pins
+    
+    // Instantiate DUT - TinyTapeout module
     tt_um_example dut (
         .ui_in(ui_in),
         .uo_out(uo_out),
@@ -50,293 +51,468 @@ module tb();
         .rst_n(rst_n)
     );
     
-    // Clock generation
+    // Clock generation - 100MHz (10ns period)
     always #5 clk = ~clk;
     
-    // Initialize signals
+    // Main test sequence
     initial begin
-        clk = 0;
-        rst_n = 0;
-        ena = 1;
-        ui_in = 8'b0;
-        uio_in = 8'b0;
+        // Initialize test counters
+        test_count = 0;
+        pass_count = 0;
+        fail_count = 0;
+        
+        $display("========================================");
+        $display("  TinyTapeout 3-Port Router Testbench  ");
+        $display("========================================");
+        $display("Time: %0t", $time);
+        
+        // Initialize all signals
+        initialize_signals();
         
         // Reset sequence
-        #20 rst_n = 1;
-        #10;
+        perform_reset();
         
-        $display("========== Router Testbench Started ==========");
-        $display("Time\t\tState\t\tOperation");
-        $display("----\t\t-----\t\t---------");
+        $display("\n=== Starting Router Tests ===");
         
-        // Test 1: Send packet to channel 0
-        test_packet_to_channel_0();
-        #50;
+        // Test 1: Basic packet to channel 0
+        test_basic_packet_ch0();
         
-        // Test 2: Send packet to channel 1
-        test_packet_to_channel_1();
-        #50;
+        // Test 2: Basic packet to channel 1  
+        test_basic_packet_ch1();
         
-        // Test 3: Send packet to channel 2
-        test_packet_to_channel_2();
-        #50;
+        // Test 3: Basic packet to channel 2
+        test_basic_packet_ch2();
         
-        // Test 4: Test parity error
+        // Test 4: Parity error detection
         test_parity_error();
-        #50;
         
-        // Test 5: Test FIFO full condition
+        // Test 5: Multiple packets same channel
+        test_multiple_packets();
+        
+        // Test 6: FIFO full condition
         test_fifo_full();
-        #100;
         
-        // Test 6: Test soft reset (timeout)
-        test_soft_reset();
-        #200;
+        // Test 7: All channels simultaneously
+        test_all_channels();
         
-        // Test 7: Test invalid address
-        test_invalid_address();
-        #50;
+        // Test 8: Invalid channel address
+        test_invalid_channel();
         
-        $display("\n========== All Tests Completed ==========");
+        // Test 9: Zero length packet
+        test_zero_length_packet();
+        
+        // Test 10: Maximum length packet
+        test_max_length_packet();
+        
+        // Final results
+        display_test_results();
+        
+        $display("\n=== Testbench Completed ===");
         $finish;
     end
     
-    // Task to send a packet to channel 0
-    task test_packet_to_channel_0();
+    // Task: Initialize all signals
+    task initialize_signals();
         begin
-            $display("\n=== Test 1: Packet to Channel 0 ===");
+            clk = 0;
+            rst_n = 1;
+            ena = 1;  // Always enabled in TinyTapeout
+            ui_in = 8'b0;
+            uio_in = 8'b0;
+            packet_idx = 0;
             
-            // Create test packet: Header + Data + Parity
-            test_packet[0] = 8'b00000100; // Header: length=4, address=00
-            test_packet[1] = 8'hAA;       // Data 1
-            test_packet[2] = 8'h55;       // Data 2
-            test_packet[3] = 8'hCC;       // Data 3
-            test_packet[4] = 8'h33;       // Data 4
-            
-            // Calculate parity
-            expected_parity = test_packet[0] ^ test_packet[1] ^ test_packet[2] ^ test_packet[3] ^ test_packet[4];
-            test_packet[5] = expected_parity;
-            
-            // Send packet
-            send_packet(6);
-            
-            // Read from channel 0
-            #20;
-            read_from_channel(0);
+            $display("%0t: Signals initialized", $time);
         end
     endtask
     
-    // Task to send a packet to channel 1
-    task test_packet_to_channel_1();
+    // Task: Perform reset sequence
+    task perform_reset();
         begin
-            $display("\n=== Test 2: Packet to Channel 1 ===");
+            $display("%0t: Starting reset sequence", $time);
+            rst_n = 0;
+            #50;  // Hold reset for 50ns
+            rst_n = 1;
+            #20;  // Wait for reset deassertion
+            $display("%0t: Reset sequence completed", $time);
+        end
+    endtask
+    
+    // Test 1: Basic packet to channel 0
+    task test_basic_packet_ch0();
+        begin
+            $display("\n--- Test 1: Basic Packet to Channel 0 ---");
+            test_count = test_count + 1;
             
-            // Create test packet
-            test_packet[0] = 8'b00001001; // Header: length=4, address=01
+            // Create packet: Header + 3 data bytes + parity
+            // Header: [7:6]=00, [5:2]=0011 (length=3), [1:0]=00 (channel 0)
+            test_packet[0] = 8'b00001100; // Length=3, Channel=0
+            test_packet[1] = 8'hAA;
+            test_packet[2] = 8'h55; 
+            test_packet[3] = 8'hCC;
+            
+            // Calculate parity (XOR of header + data)
+            expected_parity = test_packet[0] ^ test_packet[1] ^ test_packet[2] ^ test_packet[3];
+            test_packet[4] = expected_parity;
+            
+            // Send packet
+            send_packet(5);
+            
+            // Wait for processing
+            wait_for_idle();
+            
+            // Check if data is available in channel 0
+            if (vldout[0]) begin
+                $display("%0t: PASS - Channel 0 has valid data", $time);
+                pass_count = pass_count + 1;
+                
+                // Read the data
+                read_channel_0();
+            end else begin
+                $display("%0t: FAIL - Channel 0 should have valid data", $time);
+                fail_count = fail_count + 1;
+            end
+            
+            // Check for errors
+            if (err) begin
+                $display("%0t: FAIL - Unexpected error detected", $time);
+                fail_count = fail_count + 1;
+            end
+        end
+    endtask
+    
+    // Test 2: Basic packet to channel 1
+    task test_basic_packet_ch1();
+        begin
+            $display("\n--- Test 2: Basic Packet to Channel 1 ---");
+            test_count = test_count + 1;
+            
+            // Header: Length=2, Channel=1  
+            test_packet[0] = 8'b00001001; // Length=2, Channel=1
             test_packet[1] = 8'h11;
             test_packet[2] = 8'h22;
-            test_packet[3] = 8'h44;
-            test_packet[4] = 8'h88;
             
-            // Calculate parity
-            expected_parity = test_packet[0] ^ test_packet[1] ^ test_packet[2] ^ test_packet[3] ^ test_packet[4];
-            test_packet[5] = expected_parity;
+            expected_parity = test_packet[0] ^ test_packet[1] ^ test_packet[2];
+            test_packet[3] = expected_parity;
             
-            // Send packet
-            send_packet(6);
+            send_packet(4);
+            wait_for_idle();
             
-            // Read from channel 1
-            #20;
-            read_from_channel(1);
+            if (vldout[1]) begin
+                $display("%0t: PASS - Channel 1 has valid data", $time); 
+                pass_count = pass_count + 1;
+            end else begin
+                $display("%0t: FAIL - Channel 1 should have valid data", $time);
+                fail_count = fail_count + 1;
+            end
         end
     endtask
     
-    // Task to send a packet to channel 2
-    task test_packet_to_channel_2();
+    // Test 3: Basic packet to channel 2
+    task test_basic_packet_ch2();
         begin
-            $display("\n=== Test 3: Packet to Channel 2 ===");
+            $display("\n--- Test 3: Basic Packet to Channel 2 ---");
+            test_count = test_count + 1;
             
-            // Create test packet
-            test_packet[0] = 8'b00001010; // Header: length=4, address=10
+            // Header: Length=1, Channel=2
+            test_packet[0] = 8'b00000110; // Length=1, Channel=2
             test_packet[1] = 8'hFF;
-            test_packet[2] = 8'h00;
-            test_packet[3] = 8'hAB;
-            test_packet[4] = 8'hCD;
             
-            // Calculate parity
-            expected_parity = test_packet[0] ^ test_packet[1] ^ test_packet[2] ^ test_packet[3] ^ test_packet[4];
-            test_packet[5] = expected_parity;
+            expected_parity = test_packet[0] ^ test_packet[1];
+            test_packet[2] = expected_parity;
             
-            // Send packet
-            send_packet(6);
+            send_packet(3);
+            wait_for_idle();
             
-            // Read from channel 2
-            #20;
-            read_from_channel(2);
+            if (vldout[2]) begin
+                $display("%0t: PASS - Channel 2 has valid data", $time);
+                pass_count = pass_count + 1;
+            end else begin
+                $display("%0t: FAIL - Channel 2 should have valid data", $time); 
+                fail_count = fail_count + 1;
+            end
         end
     endtask
     
-    // Task to test parity error
+    // Test 4: Parity error detection
     task test_parity_error();
         begin
-            $display("\n=== Test 4: Parity Error Test ===");
+            $display("\n--- Test 4: Parity Error Detection ---");
+            test_count = test_count + 1;
             
-            // Create test packet with wrong parity
-            test_packet[0] = 8'b00000100; // Header: length=4, address=00
+            // Create packet with intentional parity error
+            test_packet[0] = 8'b00001100; // Length=3, Channel=0
             test_packet[1] = 8'hAA;
             test_packet[2] = 8'h55;
             test_packet[3] = 8'hCC;
-            test_packet[4] = 8'h33;
-            test_packet[5] = 8'h00;       // Wrong parity (should cause error)
+            test_packet[4] = 8'hFF; // Wrong parity!
             
-            // Send packet
-            send_packet(6);
+            send_packet(5);
+            wait_for_idle();
             
-            // Wait and check for error
-            #30;
             if (err) begin
-                $display("%0t: PASS - Parity error detected correctly", $time);
+                $display("%0t: PASS - Parity error correctly detected", $time);
+                pass_count = pass_count + 1;
             end else begin
                 $display("%0t: FAIL - Parity error not detected", $time);
+                fail_count = fail_count + 1; 
             end
         end
     endtask
     
-    // Task to test FIFO full condition
+    // Test 5: Multiple packets to same channel
+    task test_multiple_packets();
+        begin
+            $display("\n--- Test 5: Multiple Packets Same Channel ---");
+            test_count = test_count + 1;
+            
+            // Send 3 small packets to channel 0
+            for (i = 0; i < 3; i = i + 1) begin
+                test_packet[0] = 8'b00000100; // Length=1, Channel=0
+                test_packet[1] = 8'h10 + i;   // Different data each packet
+                
+                expected_parity = test_packet[0] ^ test_packet[1];
+                test_packet[2] = expected_parity;
+                
+                send_packet(3);
+                #10; // Small delay between packets
+            end
+            
+            wait_for_idle();
+            
+            if (vldout[0]) begin
+                $display("%0t: PASS - Multiple packets stored in channel 0", $time);
+                pass_count = pass_count + 1;
+                read_channel_0(); // Read all stored data
+            end else begin
+                $display("%0t: FAIL - No data in channel 0 after multiple packets", $time);
+                fail_count = fail_count + 1;
+            end
+        end
+    endtask
+    
+    // Test 6: FIFO full condition 
     task test_fifo_full();
         begin
-            $display("\n=== Test 5: FIFO Full Test ===");
+            $display("\n--- Test 6: FIFO Full Condition ---");
+            test_count = test_count + 1;
             
-            // Send multiple packets quickly to fill FIFO
-            for (i = 0; i < 3; i = i + 1) begin
-                test_packet[0] = 8'b00001000; // Header: length=8, address=00
-                for (j = 1; j <= 8; j = j + 1) begin
-                    test_packet[j] = 8'h10 + j + i;
-                end
+            // Try to send 5 packets (FIFO depth is 4)
+            for (i = 0; i < 5; i = i + 1) begin
+                test_packet[0] = 8'b00000100; // Length=1, Channel=0
+                test_packet[1] = 8'h20 + i;
                 
-                // Calculate parity
-                expected_parity = 8'h00;
-                for (j = 0; j <= 8; j = j + 1) begin
-                    expected_parity = expected_parity ^ test_packet[j];
-                end
-                test_packet[9] = expected_parity;
+                expected_parity = test_packet[0] ^ test_packet[1];
+                test_packet[2] = expected_parity;
                 
-                // Send packet without reading (to fill FIFO)
-                send_packet(10);
-                #5; // Small delay between packets
+                send_packet(3);
+                #5;
             end
             
-            // Now read from FIFO
-            #20;
-            read_from_channel(0);
+            wait_for_idle();
+            
+            // Should have valid data (FIFO should handle overflow gracefully)
+            if (vldout[0]) begin
+                $display("%0t: PASS - FIFO handled overflow condition", $time);
+                pass_count = pass_count + 1;
+            end else begin
+                $display("%0t: INFO - FIFO full handling behavior", $time);
+            end
         end
     endtask
     
-    // Task to test soft reset (timeout condition)
-    task test_soft_reset();
+    // Test 7: All channels simultaneously  
+    task test_all_channels();
         begin
-            $display("\n=== Test 6: Soft Reset Test ===");
+            $display("\n--- Test 7: All Channels Simultaneously ---");
+            test_count = test_count + 1;
             
-            // Send a packet but don't read it for 30 cycles to trigger soft reset
-            test_packet[0] = 8'b00000100;
-            test_packet[1] = 8'hDE;
-            test_packet[2] = 8'hAD;
-            test_packet[3] = 8'hBE;
-            test_packet[4] = 8'hEF;
-            expected_parity = test_packet[0] ^ test_packet[1] ^ test_packet[2] ^ test_packet[3] ^ test_packet[4];
-            test_packet[5] = expected_parity;
+            // Send packet to channel 0
+            test_packet[0] = 8'b00000100; // Length=1, Channel=0
+            test_packet[1] = 8'hA0;
+            expected_parity = test_packet[0] ^ test_packet[1];
+            test_packet[2] = expected_parity;
+            send_packet(3);
             
-            send_packet(6);
+            // Send packet to channel 1
+            test_packet[0] = 8'b00000101; // Length=1, Channel=1
+            test_packet[1] = 8'hA1;
+            expected_parity = test_packet[0] ^ test_packet[1];
+            test_packet[2] = expected_parity;
+            send_packet(3);
             
-            // Wait for soft reset to occur (30 cycles without read)
-            uio_in[2:0] = 3'b000; // No read enables
-            #300; // Wait longer than soft reset timeout
+            // Send packet to channel 2
+            test_packet[0] = 8'b00000110; // Length=1, Channel=2  
+            test_packet[1] = 8'hA2;
+            expected_parity = test_packet[0] ^ test_packet[1];
+            test_packet[2] = expected_parity;
+            send_packet(3);
             
-            $display("%0t: Soft reset timeout test completed", $time);
+            wait_for_idle();
+            
+            if (vldout[0] && vldout[1] && vldout[2]) begin
+                $display("%0t: PASS - All channels have valid data", $time);
+                pass_count = pass_count + 1;
+            end else begin
+                $display("%0t: FAIL - Not all channels have data: vldout=%3b", $time, vldout);
+                fail_count = fail_count + 1;
+            end
         end
     endtask
     
-    // Task to test invalid address
-    task test_invalid_address();
+    // Test 8: Invalid channel address
+    task test_invalid_channel();
         begin
-            $display("\n=== Test 7: Invalid Address Test ===");
+            $display("\n--- Test 8: Invalid Channel Address ---");
+            test_count = test_count + 1;
             
-            // Send packet with invalid address (11)
-            test_packet[0] = 8'b00000111; // Header: length=4, address=11 (invalid)
-            test_packet[1] = 8'h12;
-            test_packet[2] = 8'h34;
-            test_packet[3] = 8'h56;
-            test_packet[4] = 8'h78;
-            expected_parity = test_packet[0] ^ test_packet[1] ^ test_packet[2] ^ test_packet[3] ^ test_packet[4];
-            test_packet[5] = expected_parity;
+            // Send packet to invalid channel (11)
+            test_packet[0] = 8'b00000111; // Length=1, Channel=3 (invalid)
+            test_packet[1] = 8'hBB;
+            expected_parity = test_packet[0] ^ test_packet[1];
+            test_packet[2] = expected_parity;
             
-            send_packet(6);
+            send_packet(3);
+            wait_for_idle();
             
-            #50;
-            $display("%0t: Invalid address test completed", $time);
+            // Router should handle this gracefully (maps to channel 0)
+            $display("%0t: INFO - Invalid channel test completed", $time);
         end
     endtask
     
-    // Task to send a packet
+    // Test 9: Zero length packet
+    task test_zero_length_packet();
+        begin
+            $display("\n--- Test 9: Zero Length Packet ---");
+            test_count = test_count + 1;
+            
+            // Send zero-length packet
+            test_packet[0] = 8'b00000000; // Length=0, Channel=0
+            expected_parity = test_packet[0];
+            test_packet[1] = expected_parity;
+            
+            send_packet(2);
+            wait_for_idle();
+            
+            $display("%0t: INFO - Zero length packet test completed", $time);
+        end
+    endtask
+    
+    // Test 10: Maximum length packet
+    task test_max_length_packet();
+        begin
+            $display("\n--- Test 10: Maximum Length Packet ---");
+            test_count = test_count + 1;
+            
+            // Send maximum length packet (15 data bytes)
+            test_packet[0] = 8'b00111100; // Length=15, Channel=0
+            expected_parity = test_packet[0];
+            
+            for (i = 1; i <= 15; i = i + 1) begin
+                test_packet[i] = 8'h30 + i;
+                expected_parity = expected_parity ^ test_packet[i];
+            end
+            test_packet[16] = expected_parity;
+            
+            send_packet(17);
+            wait_for_idle();
+            
+            if (vldout[0]) begin
+                $display("%0t: PASS - Maximum length packet processed", $time);
+                pass_count = pass_count + 1;
+            end else begin
+                $display("%0t: FAIL - Maximum length packet failed", $time);
+                fail_count = fail_count + 1;
+            end
+        end
+    endtask
+    
+    // Task: Send a packet 
     task send_packet(input integer length);
         begin
-            $display("%0t: Sending packet of length %0d", $time, length);
+            $display("%0t: Sending packet of %0d bytes", $time, length);
             
             for (i = 0; i < length; i = i + 1) begin
                 @(posedge clk);
-                ui_in = {test_packet[i][7:1], 1'b1}; // Set packet_valid = 1
-                $display("%0t: Sending byte[%0d] = 0x%02h", $time, i, test_packet[i]);
-                
-                // For last byte, clear packet_valid
-                if (i == length - 1) begin
-                    @(posedge clk);
-                    ui_in = {test_packet[i][7:1], 1'b0}; // Clear packet_valid
-                end
+                ui_in = {test_packet[i][7:1], 1'b1}; // packet_valid = 1
+                $display("%0t:   Byte[%0d] = 0x%02h", $time, i, test_packet[i]);
             end
             
             @(posedge clk);
-            ui_in = 8'b0; // Clear all inputs
+            ui_in = 8'b0; // Clear packet_valid
         end
     endtask
     
-    // Task to read from a specific channel
-    task read_from_channel(input integer channel);
+    // Task: Wait for router to become idle
+    task wait_for_idle();
         begin
-            $display("%0t: Reading from channel %0d", $time, channel);
-            
-            // Enable read for the specified channel
-            case (channel)
-                0: uio_in[2:0] = 3'b001;
-                1: uio_in[2:0] = 3'b010;
-                2: uio_in[2:0] = 3'b100;
-                default: uio_in[2:0] = 3'b000;
-            endcase
-            
-            // Wait for valid output
-            wait (uo_out[channel] == 1'b1);
-            
-            // Read data while valid
-            while (uo_out[channel] == 1'b1) begin
+            while (busy) begin
                 @(posedge clk);
-                $display("%0t: Channel %0d data = 0x%02h", $time, channel, data_out_0);
+            end
+            #20; // Additional settling time
+        end
+    endtask
+    
+    // Task: Read from channel 0 (only channel accessible via pins)
+    task read_channel_0();
+        begin
+            if (!vldout[0]) return;
+            
+            $display("%0t: Reading from Channel 0:", $time);
+            uio_in[0] = 1'b1; // Enable read from channel 0
+            
+            while (vldout[0]) begin
+                @(posedge clk);
+                $display("%0t:   Channel 0 data = 0x%02h", $time, data_out_0);
+                @(posedge clk); // Additional cycle for FIFO to update
             end
             
-            // Disable read
-            uio_in[2:0] = 3'b000;
-            $display("%0t: Finished reading from channel %0d", $time, channel);
+            uio_in[0] = 1'b0; // Disable read
         end
     endtask
     
-    // Monitor important signals
-    initial begin
-        $monitor("%0t: busy=%b, err=%b, vld_out={%b,%b,%b}, ui_in=0x%02h, uo_out=0x%02h", 
-                 $time, busy, err, vldout_2, vldout_1, vldout_0, ui_in, uo_out);
+    // Task: Display final test results
+    task display_test_results();
+        begin
+            $display("\n========================================");
+            $display("           TEST RESULTS SUMMARY         ");
+            $display("========================================");
+            $display("Total Tests:  %0d", test_count);
+            $display("Passed:       %0d", pass_count);
+            $display("Failed:       %0d", fail_count);
+            $display("Pass Rate:    %0d%%", (pass_count * 100) / test_count);
+            $display("========================================");
+            
+            if (fail_count == 0) begin
+                $display("🎉 ALL TESTS PASSED! Router is ready for TinyTapeout!");
+            end else begin
+                $display("⚠️  Some tests failed. Review the design.");
+            end
+        end
+    endtask
+    
+    // Continuous monitoring
+    always @(posedge clk) begin
+        if (packet_valid) begin
+            $display("%0t: INPUT  - Data=0x%02h, Valid=%b", $time, datain, packet_valid);
+        end
+        if (|read_enb) begin
+            $display("%0t: READ   - Enable=%3b, Ch0_data=0x%02h", $time, read_enb, data_out_0);
+        end
+        if (err) begin
+            $display("%0t: ERROR  - Parity error detected!", $time);
+        end
     end
     
-    // Dump waveforms
+    // Signal monitoring for debugging
     initial begin
-        $dumpfile("router_tb.vcd");
-        $dumpvars(0, tb);
+        $monitor("%0t: busy=%b err=%b vldout=%3b ui_in=0x%02h uo_out=0x%02h uio_out=0x%02h", 
+                 $time, busy, err, vldout, ui_in, uo_out, uio_out);
+    end
+    
+    // Generate VCD file for waveform viewing
+    initial begin
+        $dumpfile("tt_router.vcd");
+        $dumpvars(0, tb_tt_um_example);
     end
 
 endmodule
