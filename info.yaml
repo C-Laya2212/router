@@ -46,7 +46,7 @@ pinout:
   uio[0]: "CH0_READ_EN"     # Channel 0 read enable (input only)
   uio[1]: "CH1_READ_EN"     # Channel 1 read enable (input only)
   uio[2]: "CH2_READ_EN"     # Channel 2 read enable (input only)
-  uio[3]: "CH0_DATA[3]"     # Channel 0 data output bit 3 (output only)
+  uio[3]: "PKT_VALID"       # Packet valid signal (input only)
   uio[4]: "CH0_DATA[4]"     # Channel 0 data output bit 4 (output only)
   uio[5]: "CH0_DATA[5]"     # Channel 0 data output bit 5 (output only)
   uio[6]: "CH0_DATA[6]"     # Channel 0 data output bit 6 (output only)
