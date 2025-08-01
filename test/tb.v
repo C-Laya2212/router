@@ -467,3 +467,32 @@ module tb();
                 while (vldout[0]) begin
                     @(posedge clk);
                     $display("%0t:   Channel 0 data = 0x%02h", $time, data_out_0);
+                    @(posedge clk); // Additional cycle for FIFO to update
+                end
+                
+                uio_in = uio_in & 8'b11111110; // Disable read (clear bit 0)
+            end
+        end
+    endtask
+
+    // Task: Display final test results
+    task display_test_results();
+        begin
+            $display("\n========================================");
+            $display("           TEST RESULTS SUMMARY         ");
+            $display("========================================");
+            $display("Total Tests:  %0d", test_count);
+            $display("Passed:       %0d", pass_count);
+            $display("Failed:       %0d", fail_count);
+            $display("Pass Rate:    %0d%%", (pass_count * 100) / test_count);
+            $display("========================================");
+            
+            if (fail_count == 0) begin
+                $display("🎉 ALL TESTS PASSED! Router is ready for TinyTapeout!");
+            end else begin
+                $display("⚠️  Some tests failed. Review the design.");
+            end
+        end
+    endtask
+
+endmodule
