@@ -16,9 +16,9 @@ module tt_um_example (
     wire err, busy;
     wire [7:0] data_out_0, data_out_1, data_out_2;
     
-    // CORRECTED: Input mapping to match test.py protocol exactly
+    // FIXED: Correct input mapping
     wire packet_valid = ui_in[0];              // packet_valid from bit 0
-    wire [7:0] datain = {ui_in[7:1], 1'b0};    // Clean data without packet_valid bit
+    wire [7:0] datain = ui_in;                 // Use full input data
     
     // Read enables from uio_in (only when used as inputs)
     wire [2:0] read_enb = uio_in[2:0];
@@ -50,7 +50,7 @@ module tt_um_example (
 
 endmodule
 
-// CORRECTED: Ultra-compact 3-channel router with fixes
+// FIXED: Ultra-compact 3-channel router with corrected logic
 module router_ultra_compact(
     input clk, resetn, packet_valid,
     input [2:0] read_enb,
@@ -73,7 +73,8 @@ module router_ultra_compact(
     // Registers for packet processing
     reg [7:0] header;
     reg [1:0] dest_channel;
-    reg [3:0] bytes_remaining;
+    reg [3:0] data_bytes_expected;
+    reg [3:0] data_bytes_received;
     reg [7:0] calc_parity, recv_parity;
     reg expecting_parity;
     reg packet_started;
@@ -87,7 +88,7 @@ module router_ultra_compact(
     reg write_fifo_0, write_fifo_1, write_fifo_2;
     reg [7:0] write_data;
 
-    // FIFO write logic
+    // FIXED: FIFO write logic - only write actual data bytes, not header or parity
     always @(*) begin
         write_fifo_0 = 1'b0;
         write_fifo_1 = 1'b0;
@@ -95,11 +96,11 @@ module router_ultra_compact(
         write_data = datain;
         
         // Only write data bytes (not header, not parity)
-        if (state == LOAD && packet_valid && packet_started && !expecting_parity && bytes_remaining > 0) begin
+        if (state == LOAD && packet_valid && packet_started && !expecting_parity) begin
             case (dest_channel)
-                2'b00: write_fifo_0 = (count_0 < 4);
-                2'b01: write_fifo_1 = (count_1 < 4);
-                2'b10: write_fifo_2 = (count_2 < 4);
+                2'b00: write_fifo_0 = (count_0 < 4) && (data_bytes_received < data_bytes_expected);
+                2'b01: write_fifo_1 = (count_1 < 4) && (data_bytes_received < data_bytes_expected);
+                2'b10: write_fifo_2 = (count_2 < 4) && (data_bytes_received < data_bytes_expected);
                 default: begin
                     // Invalid channel - don't write
                 end
@@ -107,7 +108,7 @@ module router_ultra_compact(
         end
     end
 
-    // CORRECTED: Main state machine with proper packet handling
+    // FIXED: Main state machine with proper packet handling
     always @(posedge clk) begin
         if (!resetn) begin
             state <= IDLE;
@@ -116,7 +117,8 @@ module router_ultra_compact(
             expecting_parity <= 1'b0;
             packet_started <= 1'b0;
             calc_parity <= 8'h00;
-            bytes_remaining <= 4'h0;
+            data_bytes_expected <= 4'h0;
+            data_bytes_received <= 4'h0;
             header <= 8'h00;
         end
         else begin
@@ -125,41 +127,45 @@ module router_ultra_compact(
                 busy <= 1'b0;
                 err <= 1'b0;
                 packet_started <= 1'b0;
+                data_bytes_received <= 4'h0;
                 if (packet_valid) begin
-                    header <= datain;
-                    bytes_remaining <= datain[5:2]; // Extract length from header
-                    calc_parity <= datain;
+                    // Extract actual data (remove packet_valid bit)
+                    header <= {datain[7:1], 1'b0};
+                    data_bytes_expected <= datain[5:2]; // Extract length from header
+                    calc_parity <= {datain[7:1], 1'b0}; // Start parity with clean header
                     state <= LOAD;
                     busy <= 1'b1;
                     expecting_parity <= 1'b0;
                     packet_started <= 1'b1;
-                    $display("IDLE->LOAD: Header=0x%02h, Length=%0d, Channel=%0d", datain, datain[5:2], datain[1:0]);
+                    $display("IDLE->LOAD: Header=0x%02h, Length=%0d, Channel=%0d", 
+                             {datain[7:1], 1'b0}, datain[5:2], datain[1:0]);
                 end
             end
             
             LOAD: begin
                 if (packet_valid) begin
-                    calc_parity <= calc_parity ^ datain;
-                    $display("LOAD: Data=0x%02h, Remaining=%0d, Expecting_parity=%b", datain, bytes_remaining, expecting_parity);
-                    
                     if (expecting_parity) begin
                         // This is the parity byte
                         recv_parity <= datain;
                         state <= CHECK;
-                        $display("LOAD->CHECK: Received parity=0x%02h", datain);
+                        $display("LOAD->CHECK: Received parity=0x%02h, Calc=0x%02h", datain, calc_parity);
                     end
-                    else if (bytes_remaining == 1) begin
-                        // Next byte will be parity
-                        expecting_parity <= 1'b1;
-                        bytes_remaining <= bytes_remaining - 1;
-                    end
-                    else if (bytes_remaining > 1) begin
-                        // More data bytes to come
-                        bytes_remaining <= bytes_remaining - 1;
+                    else if (data_bytes_received < data_bytes_expected) begin
+                        // This is a data byte
+                        calc_parity <= calc_parity ^ datain;
+                        data_bytes_received <= data_bytes_received + 1;
+                        $display("LOAD: Data=0x%02h, Received=%0d/%0d", datain, data_bytes_received + 1, data_bytes_expected);
+                        
+                        // Check if this was the last data byte
+                        if (data_bytes_received == data_bytes_expected - 1) begin
+                            expecting_parity <= 1'b1;
+                        end
                     end
                     else begin
-                        // bytes_remaining == 0, should not happen
-                        expecting_parity <= 1'b1;
+                        // Should not reach here - unexpected data
+                        state <= IDLE;
+                        err <= 1'b1;
+                        $display("LOAD->IDLE: Unexpected data byte");
                     end
                 end
                 else begin
@@ -186,7 +192,7 @@ module router_ultra_compact(
         end
     end
 
-    // FIFO management
+    // FIFO management - same as before
     always @(posedge clk) begin
         if (!resetn) begin
             // Initialize all pointers and counters
