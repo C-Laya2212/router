@@ -454,24 +454,24 @@ module tb();
     
     // Task: Read from channel 0 (only channel accessible via pins)
     task read_channel_0();
-    begin
-        if (!vldout[0]) begin
-            // Just exit the task normally, don't use return
-        end
-        else begin
-            $display("%0t: Reading from Channel 0:", $time);
-            uio_in[0] = 1'b1; // Enable read from channel 0
-            
-            while (vldout[0]) begin
-                @(posedge clk);
-                $display("%0t:   Channel 0 data = 0x%02h", $time, data_out_0);
-                @(posedge clk); // Additional cycle for FIFO to update
+        begin
+            if (!vldout[0]) begin
+                // Just exit the task normally
             end
-            
-            uio_in[0] = 1'b0; // Disable read
+            else begin
+                $display("%0t: Reading from Channel 0:", $time);
+                uio_in[0] = 1'b1; // Enable read from channel 0
+                
+                while (vldout[0]) begin
+                    @(posedge clk);
+                    $display("%0t:   Channel 0 data = 0x%02h", $time, data_out_0);
+                    @(posedge clk); // Additional cycle for FIFO to update
+                end
+                
+                uio_in[0] = 1'b0; // Disable read
+            end
         end
-    end
-endtask
+    endtask
     
     // Task: Display final test results
     task display_test_results();
@@ -504,12 +504,6 @@ endtask
         if (err) begin
             $display("%0t: ERROR  - Parity error detected!", $time);
         end
-    end
-    
-    // Signal monitoring for debugging
-    initial begin
-        $monitor("%0t: busy=%b err=%b vldout=%3b ui_in=0x%02h uo_out=0x%02h uio_out=0x%02h", 
-                 $time, busy, err, vldout, ui_in, uo_out, uio_out);
     end
     
     // Generate VCD file for waveform viewing
