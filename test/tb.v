@@ -26,10 +26,10 @@ module tb();
     reg [7:0] expected_parity;
     integer test_count, pass_count, fail_count;
     
-    // Signal extraction based on TinyTapeout interface
-    assign packet_valid = uio_in[3];    // FIXED: Use uio_in[3] for packet_valid
-    assign datain = ui_in[7:0];         // Full 8-bit data input (no overlap)
-    assign read_enb = uio_in[2:0];
+    // Signal extraction to match test.py protocol
+    assign packet_valid = ui_in[0];         // ui[0] for packet_valid
+    assign datain = ui_in;                  // Full 8-bit data input
+    assign read_enb = uio_in[2:0];          // uio[2:0] for read enables
     
     // Extract outputs from uo_out: {3'b000, vldout[2:0], err, busy}
     assign busy = uo_out[0];
@@ -37,7 +37,7 @@ module tb();
     assign vldout[0] = uo_out[2];
     assign vldout[1] = uo_out[3]; 
     assign vldout[2] = uo_out[4];
-    assign data_out_0 = uio_out; // Channel 0 data on bidirectional pins
+    assign data_out_0 = uio_out; // Full 8-bit channel 0 data
     
     // Instantiate DUT - TinyTapeout module
     tt_um_example dut (
@@ -426,92 +426,19 @@ module tb();
         end
     endtask
     
-    // Task: Send a packet 
+    // Task to send a packet using test.py protocol
     task send_packet(input integer length);
         begin
             $display("%0t: Sending packet of %0d bytes", $time, length);
             
             for (i = 0; i < length; i = i + 1) begin
-                ui_in = test_packet[i];     // Send full 8-bit data on ui_in
-                uio_in = uio_in & 8'b11110111; // Clear bit 3 first
-                uio_in = uio_in | 8'b00001000; // Set packet_valid on uio_in[3]
+                // Send full data byte with packet_valid=1 (matches test.py: header | 0x01)
+                ui_in = test_packet[i] | 8'b00000001; // Data + packet_valid=1
                 @(posedge clk);
                 $display("%0t:   Byte[%0d] = 0x%02h", $time, i, test_packet[i]);
             end
             
-            uio_in = uio_in & 8'b11110111; // Clear packet_valid (bit 3)
+            ui_in = 8'b00000000; // Clear packet_valid
             @(posedge clk);
         end
     endtask
-    
-    // Task: Wait for router to become idle
-    task wait_for_idle();
-        begin
-            while (busy) begin
-                @(posedge clk);
-            end
-            #20; // Additional settling time
-        end
-    endtask
-    
-    // Task: Read from channel 0 (only channel accessible via pins)
-    task read_channel_0();
-        begin
-            if (!vldout[0]) begin
-                // Just exit the task normally
-            end
-            else begin
-                $display("%0t: Reading from Channel 0:", $time);
-                uio_in = uio_in | 8'b00000001; // Enable read from channel 0 (set bit 0)
-                
-                while (vldout[0]) begin
-                    @(posedge clk);
-                    $display("%0t:   Channel 0 data = 0x%02h", $time, data_out_0);
-                    @(posedge clk); // Additional cycle for FIFO to update
-                end
-                
-                uio_in = uio_in & 8'b11111110; // Disable read (clear bit 0)
-            end
-        end
-    endtask
-    
-    // Task: Display final test results
-    task display_test_results();
-        begin
-            $display("\n========================================");
-            $display("           TEST RESULTS SUMMARY         ");
-            $display("========================================");
-            $display("Total Tests:  %0d", test_count);
-            $display("Passed:       %0d", pass_count);
-            $display("Failed:       %0d", fail_count);
-            $display("Pass Rate:    %0d%%", (pass_count * 100) / test_count);
-            $display("========================================");
-            
-            if (fail_count == 0) begin
-                $display("🎉 ALL TESTS PASSED! Router is ready for TinyTapeout!");
-            end else begin
-                $display("⚠️  Some tests failed. Review the design.");
-            end
-        end
-    endtask
-    
-    // Continuous monitoring
-    always @(posedge clk) begin
-        if (uio_in[3]) begin  // FIXED: Check packet_valid on uio_in[3]
-            $display("%0t: INPUT  - Data=0x%02h, Valid=%b", $time, datain, packet_valid);
-        end
-        if (|read_enb) begin
-            $display("%0t: READ   - Enable=%3b, Ch0_data=0x%02h", $time, read_enb, data_out_0);
-        end
-        if (err) begin
-            $display("%0t: ERROR  - Parity error detected!", $time);
-        end
-    end
-    
-    // Generate VCD file for waveform viewing
-    initial begin
-        $dumpfile("tt_router.vcd");
-        $dumpvars(0, tb);
-    end
-
-endmodule
