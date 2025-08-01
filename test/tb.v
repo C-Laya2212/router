@@ -432,14 +432,15 @@ module tb();
             $display("%0t: Sending packet of %0d bytes", $time, length);
             
             for (i = 0; i < length; i = i + 1) begin
-                @(posedge clk);
                 ui_in = test_packet[i];     // Send full 8-bit data on ui_in
-                uio_in[3] = 1'b1;           // Set packet_valid on uio_in[3]
+                uio_in = uio_in & 8'b11110111; // Clear bit 3 first
+                uio_in = uio_in | 8'b00001000; // Set packet_valid on uio_in[3]
+                @(posedge clk);
                 $display("%0t:   Byte[%0d] = 0x%02h", $time, i, test_packet[i]);
             end
             
+            uio_in = uio_in & 8'b11110111; // Clear packet_valid (bit 3)
             @(posedge clk);
-            uio_in[3] = 1'b0; // Clear packet_valid
         end
     endtask
     
@@ -461,7 +462,7 @@ module tb();
             end
             else begin
                 $display("%0t: Reading from Channel 0:", $time);
-                uio_in[0] = 1'b1; // Enable read from channel 0
+                uio_in = uio_in | 8'b00000001; // Enable read from channel 0 (set bit 0)
                 
                 while (vldout[0]) begin
                     @(posedge clk);
@@ -469,7 +470,7 @@ module tb();
                     @(posedge clk); // Additional cycle for FIFO to update
                 end
                 
-                uio_in[0] = 1'b0; // Disable read
+                uio_in = uio_in & 8'b11111110; // Disable read (clear bit 0)
             end
         end
     endtask
