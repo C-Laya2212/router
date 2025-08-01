@@ -21,7 +21,7 @@ module tb();
     wire [7:0] data_out_0;
     
     // Test variables
-    reg [7:0] test_packet [0:15];
+    reg [7:0] test_packet [0:16];
     integer i, j, packet_idx;
     reg [7:0] expected_parity;
     integer test_count, pass_count, fail_count;
@@ -454,9 +454,11 @@ module tb();
     
     // Task: Read from channel 0 (only channel accessible via pins)
     task read_channel_0();
-        begin
-            if (!vldout[0]) return;
-            
+    begin
+        if (!vldout[0]) begin
+            // Just exit the task normally, don't use return
+        end
+        else begin
             $display("%0t: Reading from Channel 0:", $time);
             uio_in[0] = 1'b1; // Enable read from channel 0
             
@@ -468,7 +470,8 @@ module tb();
             
             uio_in[0] = 1'b0; // Disable read
         end
-    endtask
+    end
+endtask
     
     // Task: Display final test results
     task display_test_results();
