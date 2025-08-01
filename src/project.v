@@ -93,7 +93,7 @@ module router_ultra_compact(
         write_fifo_0 = 1'b0;
         write_fifo_1 = 1'b0;
         write_fifo_2 = 1'b0;
-        write_data = datain;
+        write_data = {datain[7:1], 1'b0};  // Remove packet_valid bit from data too!
         
         // Only write data bytes (not header, not parity)
         if (state == LOAD && packet_valid && packet_started && !expecting_parity) begin
@@ -145,16 +145,16 @@ module router_ultra_compact(
             LOAD: begin
                 if (packet_valid) begin
                     if (expecting_parity) begin
-                        // This is the parity byte
-                        recv_parity <= datain;
+                        // This is the parity byte - also remove packet_valid bit
+                        recv_parity <= {datain[7:1], 1'b0};
                         state <= CHECK;
-                        $display("LOAD->CHECK: Received parity=0x%02h, Calc=0x%02h", datain, calc_parity);
+                        $display("LOAD->CHECK: Received parity=0x%02h, Calc=0x%02h", {datain[7:1], 1'b0}, calc_parity);
                     end
                     else if (data_bytes_received < data_bytes_expected) begin
-                        // This is a data byte
-                        calc_parity <= calc_parity ^ datain;
+                        // This is a data byte - remove packet_valid bit
+                        calc_parity <= calc_parity ^ {datain[7:1], 1'b0};
                         data_bytes_received <= data_bytes_received + 1;
-                        $display("LOAD: Data=0x%02h, Received=%0d/%0d", datain, data_bytes_received + 1, data_bytes_expected);
+                        $display("LOAD: Data=0x%02h, Received=%0d/%0d", {datain[7:1], 1'b0}, data_bytes_received + 1, data_bytes_expected);
                         
                         // Check if this was the last data byte
                         if (data_bytes_received == data_bytes_expected - 1) begin
