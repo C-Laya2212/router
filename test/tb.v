@@ -442,4 +442,56 @@ module tb();
             @(posedge clk);
         end
     endtask
+    // Add these tasks to your tb.v file:
+
+// Task: Wait for router to become idle
+task wait_for_idle();
+    begin
+        while (busy) begin
+            @(posedge clk);
+        end
+        #20; // Additional settling time
+    end
+endtask
+
+// Task: Read from channel 0 (only channel accessible via pins)
+task read_channel_0();
+    begin
+        if (!vldout[0]) begin
+            // Just exit the task normally
+        end
+        else begin
+            $display("%0t: Reading from Channel 0:", $time);
+            uio_in = uio_in | 8'b00000001; // Enable read from channel 0 (set bit 0)
+            
+            while (vldout[0]) begin
+                @(posedge clk);
+                $display("%0t:   Channel 0 data = 0x%02h", $time, data_out_0);
+                @(posedge clk); // Additional cycle for FIFO to update
+            end
+            
+            uio_in = uio_in & 8'b11111110; // Disable read (clear bit 0)
+        end
+    end
+endtask
+
+// Task: Display final test results
+task display_test_results();
+    begin
+        $display("\n========================================");
+        $display("           TEST RESULTS SUMMARY         ");
+        $display("========================================");
+        $display("Total Tests:  %0d", test_count);
+        $display("Passed:       %0d", pass_count);
+        $display("Failed:       %0d", fail_count);
+        $display("Pass Rate:    %0d%%", (pass_count * 100) / test_count);
+        $display("========================================");
+        
+        if (fail_count == 0) begin
+            $display("🎉 ALL TESTS PASSED! Router is ready for TinyTapeout!");
+        end else begin
+            $display("⚠️  Some tests failed. Review the design.");
+        end
+    end
+endtask
 endmodule
