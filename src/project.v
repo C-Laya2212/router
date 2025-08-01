@@ -16,12 +16,12 @@ module tt_um_example (
     wire err, busy;
     wire [7:0] data_out_0, data_out_1, data_out_2;
     
-    // Input mapping to match test.py protocol
-    wire packet_valid = ui_in[0];          // ui[0] for packet valid
-    wire [7:0] datain = {ui_in[7:1], 1'b0};             // Full 8-bit data input (test sends data+valid together)
+    // CORRECTED: Input mapping to match test.py protocol exactly
+    wire packet_valid = ui_in[0];              // packet_valid from bit 0
+    wire [7:0] datain = {ui_in[7:1], 1'b0};    // Clean data without packet_valid bit
     
     // Read enables from uio_in (only when used as inputs)
-    wire [2:0] read_enb = uio_in[2:0];     // uio[2:0] for read enables
+    wire [2:0] read_enb = uio_in[2:0];
     
     // Instantiate ultra-compact router
     router_ultra_compact router_inst (
@@ -50,7 +50,7 @@ module tt_um_example (
 
 endmodule
 
-// Ultra-compact 3-channel router - FIXED VERSION
+// CORRECTED: Ultra-compact 3-channel router with fixes
 module router_ultra_compact(
     input clk, resetn, packet_valid,
     input [2:0] read_enb,
@@ -76,6 +76,7 @@ module router_ultra_compact(
     reg [3:0] bytes_remaining;
     reg [7:0] calc_parity, recv_parity;
     reg expecting_parity;
+    reg packet_started;
 
     // Channel decode from address bits [1:0]
     always @(*) begin
@@ -86,32 +87,34 @@ module router_ultra_compact(
     reg write_fifo_0, write_fifo_1, write_fifo_2;
     reg [7:0] write_data;
 
-    // FIFO write logic separated from main state machine
+    // FIFO write logic
     always @(*) begin
         write_fifo_0 = 1'b0;
         write_fifo_1 = 1'b0;
         write_fifo_2 = 1'b0;
         write_data = datain;
         
-        if (state == LOAD && packet_valid && !expecting_parity) begin
+        // Only write data bytes (not header, not parity)
+        if (state == LOAD && packet_valid && packet_started && !expecting_parity && bytes_remaining > 0) begin
             case (dest_channel)
                 2'b00: write_fifo_0 = (count_0 < 4);
                 2'b01: write_fifo_1 = (count_1 < 4);
                 2'b10: write_fifo_2 = (count_2 < 4);
                 default: begin
-                    // Invalid channel
+                    // Invalid channel - don't write
                 end
             endcase
         end
     end
 
-    // Main state machine
+    // CORRECTED: Main state machine with proper packet handling
     always @(posedge clk) begin
         if (!resetn) begin
             state <= IDLE;
             busy <= 1'b0;
             err <= 1'b0;
             expecting_parity <= 1'b0;
+            packet_started <= 1'b0;
             calc_parity <= 8'h00;
             bytes_remaining <= 4'h0;
             header <= 8'h00;
@@ -121,6 +124,7 @@ module router_ultra_compact(
             IDLE: begin
                 busy <= 1'b0;
                 err <= 1'b0;
+                packet_started <= 1'b0;
                 if (packet_valid) begin
                     header <= datain;
                     bytes_remaining <= datain[5:2]; // Extract length from header
@@ -128,35 +132,52 @@ module router_ultra_compact(
                     state <= LOAD;
                     busy <= 1'b1;
                     expecting_parity <= 1'b0;
+                    packet_started <= 1'b1;
+                    $display("IDLE->LOAD: Header=0x%02h, Length=%0d, Channel=%0d", datain, datain[5:2], datain[1:0]);
                 end
             end
             
             LOAD: begin
                 if (packet_valid) begin
-                    if (!expecting_parity) begin
-                        calc_parity <= calc_parity ^ datain;
-                        
-                        if (bytes_remaining == 1) begin
-                            expecting_parity <= 1'b1; // Next byte should be parity
-                        end else begin
-                            bytes_remaining <= bytes_remaining - 1;
-                        end
-                    end
-                    else begin
+                    calc_parity <= calc_parity ^ datain;
+                    $display("LOAD: Data=0x%02h, Remaining=%0d, Expecting_parity=%b", datain, bytes_remaining, expecting_parity);
+                    
+                    if (expecting_parity) begin
                         // This is the parity byte
                         recv_parity <= datain;
                         state <= CHECK;
+                        $display("LOAD->CHECK: Received parity=0x%02h", datain);
+                    end
+                    else if (bytes_remaining == 1) begin
+                        // Next byte will be parity
+                        expecting_parity <= 1'b1;
+                        bytes_remaining <= bytes_remaining - 1;
+                    end
+                    else if (bytes_remaining > 1) begin
+                        // More data bytes to come
+                        bytes_remaining <= bytes_remaining - 1;
+                    end
+                    else begin
+                        // bytes_remaining == 0, should not happen
+                        expecting_parity <= 1'b1;
                     end
                 end
                 else begin
                     // Packet ended unexpectedly
                     state <= IDLE;
                     err <= 1'b1;
+                    $display("LOAD->IDLE: Packet ended unexpectedly");
                 end
             end
             
             CHECK: begin
-                err <= (calc_parity != recv_parity);
+                if (calc_parity == recv_parity) begin
+                    err <= 1'b0;
+                    $display("CHECK: Parity OK (calc=0x%02h, recv=0x%02h)", calc_parity, recv_parity);
+                end else begin
+                    err <= 1'b1;
+                    $display("CHECK: Parity ERROR (calc=0x%02h, recv=0x%02h)", calc_parity, recv_parity);
+                end
                 state <= IDLE;
             end
             
@@ -191,56 +212,52 @@ module router_ultra_compact(
                 fifo_0[wr_ptr_0] <= write_data;
                 wr_ptr_0 <= wr_ptr_0 + 1;
                 rd_ptr_0 <= rd_ptr_0 + 1;
-                // count stays the same
+                $display("FIFO0: Simultaneous R/W, data=0x%02h", write_data);
             end
             else if (write_fifo_0) begin
                 // Write only
                 fifo_0[wr_ptr_0] <= write_data;
                 wr_ptr_0 <= wr_ptr_0 + 1;
                 count_0 <= count_0 + 1;
+                $display("FIFO0: Write data=0x%02h, count=%0d->%0d", write_data, count_0, count_0+1);
             end
             else if (read_enb[0] && count_0 > 0) begin
                 // Read only
                 rd_ptr_0 <= rd_ptr_0 + 1;
                 count_0 <= count_0 - 1;
+                $display("FIFO0: Read data=0x%02h, count=%0d->%0d", fifo_0[rd_ptr_0], count_0, count_0-1);
             end
             
             // FIFO 1 operations
             if (write_fifo_1 && read_enb[1] && count_1 > 0) begin
-                // Simultaneous read and write
                 fifo_1[wr_ptr_1] <= write_data;
                 wr_ptr_1 <= wr_ptr_1 + 1;
                 rd_ptr_1 <= rd_ptr_1 + 1;
-                // count stays the same
             end
             else if (write_fifo_1) begin
-                // Write only
                 fifo_1[wr_ptr_1] <= write_data;
                 wr_ptr_1 <= wr_ptr_1 + 1;
                 count_1 <= count_1 + 1;
+                $display("FIFO1: Write data=0x%02h, count=%0d->%0d", write_data, count_1, count_1+1);
             end
             else if (read_enb[1] && count_1 > 0) begin
-                // Read only
                 rd_ptr_1 <= rd_ptr_1 + 1;
                 count_1 <= count_1 - 1;
             end
             
             // FIFO 2 operations
             if (write_fifo_2 && read_enb[2] && count_2 > 0) begin
-                // Simultaneous read and write
                 fifo_2[wr_ptr_2] <= write_data;
                 wr_ptr_2 <= wr_ptr_2 + 1;
                 rd_ptr_2 <= rd_ptr_2 + 1;
-                // count stays the same  
             end
             else if (write_fifo_2) begin
-                // Write only
                 fifo_2[wr_ptr_2] <= write_data;
                 wr_ptr_2 <= wr_ptr_2 + 1;
                 count_2 <= count_2 + 1;
+                $display("FIFO2: Write data=0x%02h, count=%0d->%0d", write_data, count_2, count_2+1);
             end
             else if (read_enb[2] && count_2 > 0) begin
-                // Read only
                 rd_ptr_2 <= rd_ptr_2 + 1;
                 count_2 <= count_2 - 1;
             end
@@ -255,5 +272,12 @@ module router_ultra_compact(
     assign vldout[0] = (count_0 > 0);
     assign vldout[1] = (count_1 > 0);
     assign vldout[2] = (count_2 > 0);
+
+    // Debug output for valid signals
+    always @(posedge clk) begin
+        if (vldout != 3'b000) begin
+            $display("VLDOUT: %3b, Counts: [%0d,%0d,%0d]", vldout, count_0, count_1, count_2);
+        end
+    end
 
 endmodule
