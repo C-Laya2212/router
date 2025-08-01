@@ -3,47 +3,54 @@ project:
   title:        "Ultra-Compact 3-Channel Packet Router"      # Project title
   author:       "Laya"      # Your name
   discord:      ""      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
-  description:  "3-channel packet router with parity checking and FIFO buffering for network-on-chip applications"      # One line description of what your project does
+  description:  "3-channel packet router with parity checking, FIFO buffering, and TinyTapeout interface - only channel 0 data accessible via pins"      # One line description of what your project does
   language:     "Verilog" # other examples include SystemVerilog, Amaranth, VHDL, etc
   clock_hz:     50000000       # Clock frequency in Hz (50MHz - typical for router applications)
+
   # How many tiles your design occupies? A single tile is about 167x108 uM.
   tiles: "1x1"          # Valid values: 1x1, 1x2, 2x2, 3x2, 4x2, 6x2 or 8x2
+
   # Your top module name must start with "tt_um_". Make it unique by including your github username:
   top_module:  "tt_um_example"
+
   # List your project's source files here.
   # Source files must be in ./src and you must list each source file separately, one per line.
   # Don't forget to also update `PROJECT_SOURCES` in test/Makefile.
   source_files:
     - "project.v"
+
 # The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
 # This section is for the datasheet/website. Use descriptive names (e.g., RX, TX, MOSI, SCL, SEG_A, etc.).
 pinout:
   # Inputs
-  ui[0]: "PKT_VALID"     # Packet valid signal
-  ui[1]: "DATA_IN[1]"    # Data input bit 1
-  ui[2]: "DATA_IN[2]"    # Data input bit 2
-  ui[3]: "DATA_IN[3]"    # Data input bit 3
-  ui[4]: "DATA_IN[4]"    # Data input bit 4
-  ui[5]: "DATA_IN[5]"    # Data input bit 5
-  ui[6]: "DATA_IN[6]"    # Data input bit 6
-  ui[7]: "DATA_IN[7]"    # Data input bit 7 (MSB)
+  ui[0]: "PKT_VALID"        # Packet valid signal
+  ui[1]: "DATA_IN[1]"       # Data input bit 1
+  ui[2]: "DATA_IN[2]"       # Data input bit 2
+  ui[3]: "DATA_IN[3]"       # Data input bit 3
+  ui[4]: "DATA_IN[4]"       # Data input bit 4
+  ui[5]: "DATA_IN[5]"       # Data input bit 5
+  ui[6]: "DATA_IN[6]"       # Data input bit 6
+  ui[7]: "DATA_IN[7]"       # Data input bit 7 (MSB)
+
   # Outputs
-  uo[0]: "BUSY"          # Router busy status
-  uo[1]: "ERROR"         # Parity error flag
-  uo[2]: "CH0_VALID"     # Channel 0 data valid
-  uo[3]: "CH1_VALID"     # Channel 1 data valid
-  uo[4]: "CH2_VALID"     # Channel 2 data valid
-  uo[5]: ""              # Unused
-  uo[6]: ""              # Unused
-  uo[7]: ""              # Unused
+  uo[0]: "BUSY"             # Router busy status
+  uo[1]: "ERROR"            # Parity error flag
+  uo[2]: "CH0_VALID"        # Channel 0 data valid
+  uo[3]: "CH1_VALID"        # Channel 1 data valid
+  uo[4]: "CH2_VALID"        # Channel 2 data valid
+  uo[5]: ""                 # Unused
+  uo[6]: ""                 # Unused
+  uo[7]: ""                 # Unused
+
   # Bidirectional pins
-  uio[0]: "CH0_READ_EN"  # Channel 0 read enable (input) / Data out bit 0 (output)
-  uio[1]: "CH1_READ_EN"  # Channel 1 read enable (input) / Data out bit 1 (output)
-  uio[2]: "CH2_READ_EN"  # Channel 2 read enable (input) / Data out bit 2 (output)
-  uio[3]: ""             # Unused input / Data out bit 3 (output)
-  uio[4]: ""             # Unused input / Data out bit 4 (output)
-  uio[5]: ""             # Unused input / Data out bit 5 (output)
-  uio[6]: ""             # Unused input / Data out bit 6 (output)
-  uio[7]: ""             # Unused input / Data out bit 7 (output)
+  uio[0]: "CH0_READ_EN"     # Channel 0 read enable (input only)
+  uio[1]: "CH1_READ_EN"     # Channel 1 read enable (input only)
+  uio[2]: "CH2_READ_EN"     # Channel 2 read enable (input only)
+  uio[3]: "CH0_DATA[3]"     # Channel 0 data output bit 3 (output only)
+  uio[4]: "CH0_DATA[4]"     # Channel 0 data output bit 4 (output only)
+  uio[5]: "CH0_DATA[5]"     # Channel 0 data output bit 5 (output only)
+  uio[6]: "CH0_DATA[6]"     # Channel 0 data output bit 6 (output only)
+  uio[7]: "CH0_DATA[7]"     # Channel 0 data output bit 7 (output only)
+
 # Do not change!
 yaml_version: 6
