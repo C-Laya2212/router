@@ -37,11 +37,71 @@ Byte N+1: XOR parity of all previous bytes
 ### Operation Flow
 
 1. **Packet Reception:** Router receives header byte and transitions to LOAD state
-2. **Data Loading:** Subsequent data bytes are stored in the appropriate channel FIFO
-3. **Parity Check:** Final parity byte is compared against calculated XOR parity
-4. **Status Update:** Router updates error flag and returns to IDLE state
+2. **Address Decoding:** Destination port extracted from header bits [1:0]
+3. **Data Loading:** Subsequent data bytes are stored in the appropriate port FIFO
+4. **Parity Accumulation:** Running XOR parity calculated during data loading
+5. **Parity Verification:** Final parity byte compared against calculated value
+6. **Status Update:** Router updates error flag and returns to IDLE state
 
-The router supports simultaneous packet storage across all three channels and handles back-pressure through FIFO full conditions.
+The router supports simultaneous packet storage across all three ports and handles back-pressure through FIFO full conditions.
+
+### Performance Analysis
+
+**Throughput Characteristics:**
+- **Peak Input Rate:** 1 byte per clock cycle (limited by single input port)
+- **Latency Components:**
+  - **Processing Delay:** 2-3 clock cycles (header decode + parity check)
+  - **Queueing Delay:** Depends on FIFO occupancy and output rate
+  - **Serialization Delay:** 8 clock cycles per byte at output (if bit-serial)
+- **Buffer Utilization:** 4-deep FIFOs provide burst absorption
+- **Port Utilization:** Independent FIFOs enable concurrent multi-port operation
+
+**Area-Performance Trade-offs:**
+The design makes several conscious trade-offs for area optimization:
+- **Memory Organization:** Distributed small FIFOs vs. centralized shared memory
+  - *Benefit:* Lower control complexity, parallel access
+  - *Cost:* Higher total memory bits due to separate addressing
+- **State Machine Complexity:** Minimal 3-state FSM vs. pipeline stages
+  - *Benefit:* Reduced control logic area
+  - *Cost:* Higher per-packet latency, no overlapped processing
+- **Error Handling:** Detection-only vs. correction capability
+  - *Benefit:* Minimal area overhead (just XOR gates)
+  - *Cost:* Requires higher-level protocols for error recovery
+
+**Timing Analysis:**
+Critical path analysis for maximum clock frequency:
+- **Input Path:** ui_in → header decode → FIFO write enable
+- **Output Path:** FIFO read → uio_out (combinational)
+- **Control Path:** State machine transitions and counter updates
+- **Constraint:** Setup time for FIFO write must be met
+
+**Scalability Considerations:**
+Extending this router to N ports requires:
+- **Linear Scaling:** FIFO resources, read/write pointers scale O(N)
+- **Logarithmic Scaling:** Address decode logic scales O(log N)
+- **Constant Resources:** State machine, parity calculator remain same
+- **Pin Limitations:** TinyTapeout pins become limiting factor beyond 3-4 ports
+
+### Mathematical Foundation
+
+**FIFO Pointer Arithmetic:**
+For a FIFO of depth D with pointers P_w (write) and P_r (read):
+- **Empty Condition:** P_w = P_r
+- **Full Condition:** (P_w + 1) mod D = P_r
+- **Occupancy:** (P_w - P_r) mod D entries currently stored
+- **Available Space:** D - occupancy
+
+**Parity Calculation:**
+For packet bytes B₀, B₁, ..., Bₙ:
+- **Transmitted Parity:** P_tx = B₀ ⊕ B₁ ⊕ ... ⊕ Bₙ
+- **Received Parity:** P_rx (separate byte)
+- **Error Detection:** E = P_tx ⊕ P_rx (E ≠ 0 indicates error)
+- **Syndrome:** Single-bit error in position i gives syndrome = 2ⁱ
+
+**Performance Metrics:**
+- **Packet Rate:** R = f_clk / (L + O) where L is packet length, O is overhead
+- **Utilization:** U = λ/μ = (arrival rate)/(service rate)
+- **Buffer Occupancy:** N = λ × (service time) for steady state
 
 ## How to test
 
@@ -100,6 +160,37 @@ The router supports simultaneous packet storage across all three channels and ha
 | IDLE  | 0    | 0     | Data dependent | Data dependent | Data dependent |
 | LOAD  | 1    | 0     | Data dependent | Data dependent | Data dependent |
 | CHECK | 1    | Parity result | Updated | Updated | Updated |
+
+### Design Verification Theory
+
+**Formal Verification Approaches:**
+1. **State Machine Verification:**
+   - **Reachability:** All states reachable from reset state
+   - **Liveness:** No deadlock states (system always progresses)
+   - **Safety:** Invalid states never reached (e.g., simultaneous read/write to same FIFO location)
+
+2. **FIFO Correctness:**
+   - **Invariant:** 0 ≤ occupancy ≤ depth always holds
+   - **FIFO Property:** First data in is first data out (ordering preserved)
+   - **Data Integrity:** Written data equals read data (no corruption)
+
+3. **Protocol Compliance:**
+   - **Packet Format:** All received packets conform to header + data + parity structure
+   - **Flow Control:** No packets sent when downstream buffer full
+   - **Error Handling:** All parity mismatches detected and flagged
+
+**Testbench Theory:**
+Verification uses **directed testing** with specific test vectors:
+- **Boundary Conditions:** Empty FIFOs, full FIFOs, single-entry FIFOs
+- **Corner Cases:** Zero-length packets, maximum-length packets, back-to-back packets
+- **Error Injection:** Intentional parity errors, malformed packets
+- **Stress Testing:** Simultaneous multi-port traffic, burst patterns
+
+**Coverage Metrics:**
+- **Code Coverage:** Percentage of HDL lines exercised by tests
+- **State Coverage:** All FSM states and transitions visited
+- **Functional Coverage:** All specified behaviors verified
+- **Toggle Coverage:** All signals toggled during simulation
 
 ### Pin Mapping Reference
 
