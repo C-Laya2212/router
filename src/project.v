@@ -16,9 +16,9 @@ module tt_um_example (
     wire err, busy;
     wire [7:0] data_out_0, data_out_1, data_out_2;
     
-    // Input mapping
-    wire packet_valid = ui_in[0];
-    wire [7:0] datain = ui_in;     // Full 8-bit data input
+    // Input mapping - FIXED: separate valid and data
+    wire packet_valid = uio_in[3];     // Use uio_in[3] for packet_valid
+    wire [7:0] datain = ui_in;         // Full 8-bit data input (no overlap)
     
     // Read enables from uio_in (only when used as inputs)
     wire [2:0] read_enb = uio_in[2:0];
@@ -41,10 +41,10 @@ module tt_um_example (
     // Output mapping
     assign uo_out = {3'b000, vldout[2], vldout[1], vldout[0], err, busy};
     assign uio_out = data_out_0; // Only output channel 0 data due to pin limitations
-    assign uio_oe = 8'b11111000; // Only uio[7:3] as outputs, uio[2:0] as inputs for read enables
+    assign uio_oe = 8'b11110000; // uio[7:4] as outputs, uio[3:0] as inputs for read enables + valid
     
     // Unused signal to prevent warnings
-    wire _unused = &{ena, uio_in[7:3], data_out_1, data_out_2, 1'b0};
+    wire _unused = &{ena, uio_in[7:4], data_out_1, data_out_2, 1'b0};
 
 endmodule
 
