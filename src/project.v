@@ -79,6 +79,9 @@ module router_ultra_compact(
     reg expecting_parity;
     reg packet_started;
 
+    // FIXED: Extract actual data from datain (remove packet_valid bit)
+    wire [7:0] actual_data = {datain[7:1], 1'b0};
+
     // Channel decode from address bits [1:0]
     always @(*) begin
         dest_channel = header[1:0];
@@ -88,12 +91,12 @@ module router_ultra_compact(
     reg write_fifo_0, write_fifo_1, write_fifo_2;
     reg [7:0] write_data;
 
-    // FIXED: FIFO write logic - only write actual data bytes, not header or parity
+    // FIXED: FIFO write logic - use actual_data for data bytes
     always @(*) begin
         write_fifo_0 = 1'b0;
         write_fifo_1 = 1'b0;
         write_fifo_2 = 1'b0;
-        write_data = {datain[7:1], 1'b0};  // Remove packet_valid bit from data too!
+        write_data = actual_data;  // Use the cleaned data
         
         // Only write data bytes (not header, not parity)
         if (state == LOAD && packet_valid && packet_started && !expecting_parity) begin
@@ -129,32 +132,32 @@ module router_ultra_compact(
                 packet_started <= 1'b0;
                 data_bytes_received <= 4'h0;
                 if (packet_valid) begin
-                    // Extract actual data (remove packet_valid bit)
-                    header <= {datain[7:1], 1'b0};
-                    data_bytes_expected <= datain[5:2]; // Extract length from header
-                    calc_parity <= {datain[7:1], 1'b0}; // Start parity with clean header
+                    // FIXED: Store actual header data (remove packet_valid bit)
+                    header <= actual_data;
+                    data_bytes_expected <= actual_data[5:2]; // Extract length from clean header
+                    calc_parity <= actual_data; // Start parity with clean header
                     state <= LOAD;
                     busy <= 1'b1;
                     expecting_parity <= 1'b0;
                     packet_started <= 1'b1;
                     $display("IDLE->LOAD: Header=0x%02h, Length=%0d, Channel=%0d", 
-                             {datain[7:1], 1'b0}, datain[5:2], datain[1:0]);
+                             actual_data, actual_data[5:2], actual_data[1:0]);
                 end
             end
             
             LOAD: begin
                 if (packet_valid) begin
                     if (expecting_parity) begin
-                        // This is the parity byte - also remove packet_valid bit
-                        recv_parity <= {datain[7:1], 1'b0};
+                        // This is the parity byte - use actual_data
+                        recv_parity <= actual_data;
                         state <= CHECK;
-                        $display("LOAD->CHECK: Received parity=0x%02h, Calc=0x%02h", {datain[7:1], 1'b0}, calc_parity);
+                        $display("LOAD->CHECK: Received parity=0x%02h, Calc=0x%02h", actual_data, calc_parity);
                     end
                     else if (data_bytes_received < data_bytes_expected) begin
-                        // This is a data byte - remove packet_valid bit
-                        calc_parity <= calc_parity ^ {datain[7:1], 1'b0};
+                        // This is a data byte - use actual_data
+                        calc_parity <= calc_parity ^ actual_data;
                         data_bytes_received <= data_bytes_received + 1;
-                        $display("LOAD: Data=0x%02h, Received=%0d/%0d", {datain[7:1], 1'b0}, data_bytes_received + 1, data_bytes_expected);
+                        $display("LOAD: Data=0x%02h, Received=%0d/%0d", actual_data, data_bytes_received + 1, data_bytes_expected);
                         
                         // Check if this was the last data byte
                         if (data_bytes_received == data_bytes_expected - 1) begin
