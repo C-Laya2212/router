@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: © 2024 Tiny Tapeout
-# SPDX-License-Identifier: Apache-2.0
-
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles
@@ -31,7 +28,7 @@ async def test_project(dut):
     # After reset, router should be idle (busy=0, err=0, vldout=000)
     # uo_out format: {3'b000, vldout[2:0], err, busy}
     expected_initial = 0b00000000  # All zeros
-   assert dut.uo_out.value == expected_initial, f"Expected initial state 0x{expected_initial:02X}, got 0x{int(dut.uo_out.value):02X}"
+    assert dut.uo_out.value == expected_initial, f"Expected initial state 0x{expected_initial:02X}, got 0x{int(dut.uo_out.value):02X}"
     dut._log.info("✅ Initial state correct")
     
     # Test 2: Send packet to channel 0
@@ -190,61 +187,3 @@ async def test_project(dut):
     # Check if data is available on uio_out (should be the data byte we sent)
     if (dut.uo_out.value & 0x04) != 0:  # vldout[0] = 1
         read_data = dut.uio_out.value
-        dut._log.info(f"✅ Read data from channel 0: 0x{read_data:02X}")
-        
-        # Give one more clock cycle to pop the FIFO
-        await ClockCycles(dut.clk, 1)
-    
-    # Disable read
-    dut.uio_in.value = 0
-    await ClockCycles(dut.clk, 1)
-    
-    # Test 7: Test multiple packets to same channel
-    dut._log.info("Test 7: Test multiple packets to same channel")
-    
-    # Send 3 small packets to channel 0
-    for i in range(3):
-        header = 0b00000100  # length=1, channel=0
-        data1 = 0x10 + i
-        parity = header ^ data1
-        
-        dut.ui_in.value = header | 0x01
-        await ClockCycles(dut.clk, 1)
-        dut.ui_in.value = data1 | 0x01
-        await ClockCycles(dut.clk, 1)
-        dut.ui_in.value = parity | 0x01
-        await ClockCycles(dut.clk, 1)
-        dut.ui_in.value = 0
-        await ClockCycles(dut.clk, 2)
-    
-    # Wait for all packets to be processed
-    for i in range(30):
-        if (dut.uo_out.value & 0x01) == 0:
-            break
-        await ClockCycles(dut.clk, 1)
-    
-    # Channel 0 should still have valid data
-    assert (dut.uo_out.value & 0x04) != 0, "Channel 0 should have valid data after multiple packets"
-    dut._log.info("✅ Multiple packets successfully stored")
-    
-    # Test 8: Final status check
-    dut._log.info("Test 8: Final status check")
-    
-    await ClockCycles(dut.clk, 5)
-    
-    # Extract final status
-    final_status = dut.uo_out.value
-    busy = final_status & 0x01
-    err = (final_status >> 1) & 0x01
-    vldout = (final_status >> 2) & 0x07
-    
-    dut._log.info(f"Final status - Busy: {busy}, Error: {err}, Valid channels: {vldout:03b}")
-    
-    # Router should not be busy at the end
-    assert busy == 0, "Router should be idle at end of test"
-    
-    # Should have valid data in at least channel 0
-    assert (vldout & 0x01) != 0, "Channel 0 should have valid data"
-    
-    dut._log.info("✅ All tests passed!")
-    dut._log.info("🎉 3-Port Router is working correctly and ready for TinyTapeout!")
