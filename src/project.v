@@ -18,7 +18,7 @@ module tt_um_example (
     
     // Input mapping to match test.py protocol
     wire packet_valid = ui_in[0];          // ui[0] for packet valid
-    wire [7:0] datain = ui_in;             // Full 8-bit data input (test sends data+valid together)
+    wire [7:0] datain = {ui_in[7:1], 1'b0};             // Full 8-bit data input (test sends data+valid together)
     
     // Read enables from uio_in (only when used as inputs)
     wire [2:0] read_enb = uio_in[2:0];     // uio[2:0] for read enables
