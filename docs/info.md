@@ -1,4 +1,4 @@
-# 3-Port Packet Router
+# 3-Port Packet Route
 
 ## How it works
 
