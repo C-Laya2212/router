@@ -1,13 +1,15 @@
+// tb.v
 `default_nettype none
-`timescale 1ns / 1ps
+`timescale 1ns/1ps
 
-module tb ();
-  initial begin $dumpfile("tb.vcd"); $dumpvars(0,tb); end
+module tb();
   reg clk = 0;
   always #5 clk = ~clk;
+
   reg rst_n = 0;
   reg ena = 1;
-  reg [7:0] ui_in = 0, uio_in = 0;
+  reg [7:0] ui_in = 0;
+  reg [7:0] uio_in = 0;
   wire [7:0] uo_out, uio_out, uio_oe;
 
   tt_um_example dut (
@@ -29,12 +31,12 @@ module tb ();
 
   task send_pkt(input [3:0] L, input [1:0] ch);
     integer i;
-    reg [7:0] header, parity, data;
-    header = {2'b00, L, ch};
-    parity = header;
-    ui_in = header | 8'h01; @(posedge clk);
+    reg [7:0] hdr, parity, data;
+    hdr = {2'b00, L, ch};
+    parity = hdr;
+    ui_in = hdr | 8'h01; @(posedge clk);
     for (i = 0; i < L; i = i + 1) begin
-      data = 8'h10 + {ch, i};
+      data = 8'hA0 + {ch, i};
       parity = parity ^ data;
       ui_in = data | 8'h01; @(posedge clk);
     end
