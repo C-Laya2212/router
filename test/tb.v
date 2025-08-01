@@ -27,8 +27,8 @@ module tb();
     integer test_count, pass_count, fail_count;
     
     // Signal extraction based on TinyTapeout interface
-    assign packet_valid = ui_in[0];
-    assign datain = ui_in[7:0];
+    assign packet_valid = uio_in[3];    // FIXED: Use uio_in[3] for packet_valid
+    assign datain = ui_in[7:0];         // Full 8-bit data input (no overlap)
     assign read_enb = uio_in[2:0];
     
     // Extract outputs from uo_out: {3'b000, vldout[2:0], err, busy}
@@ -433,13 +433,13 @@ module tb();
             
             for (i = 0; i < length; i = i + 1) begin
                 @(posedge clk);
-                ui_in = test_packet[i]; // Send full 8-bit data
-                ui_in[0] = 1'b1;        // Set packet_valid bit
+                ui_in = test_packet[i];     // Send full 8-bit data on ui_in
+                uio_in[3] = 1'b1;           // Set packet_valid on uio_in[3]
                 $display("%0t:   Byte[%0d] = 0x%02h", $time, i, test_packet[i]);
             end
             
             @(posedge clk);
-            ui_in = 8'b0; // Clear packet_valid
+            uio_in[3] = 1'b0; // Clear packet_valid
         end
     endtask
     
@@ -496,7 +496,7 @@ module tb();
     
     // Continuous monitoring
     always @(posedge clk) begin
-        if (packet_valid) begin
+        if (uio_in[3]) begin  // FIXED: Check packet_valid on uio_in[3]
             $display("%0t: INPUT  - Data=0x%02h, Valid=%b", $time, datain, packet_valid);
         end
         if (|read_enb) begin
