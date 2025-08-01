@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
 
-module tb_tt_um_example();
+module tb();
 
     // TinyTapeout standard interface signals
     reg [7:0] ui_in;      // Dedicated inputs
@@ -512,7 +512,7 @@ module tb_tt_um_example();
     // Generate VCD file for waveform viewing
     initial begin
         $dumpfile("tt_router.vcd");
-        $dumpvars(0, tb_tt_um_example);
+        $dumpvars(0, tb);
     end
 
 endmodule
