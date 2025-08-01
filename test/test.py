@@ -31,7 +31,7 @@ async def test_project(dut):
     # After reset, router should be idle (busy=0, err=0, vldout=000)
     # uo_out format: {3'b000, vldout[2:0], err, busy}
     expected_initial = 0b00000000  # All zeros
-    assert dut.uo_out.value == expected_initial, f"Expected initial state 0x{expected_initial:02X}, got 0x{dut.uo_out.value:02X}"
+   assert dut.uo_out.value == expected_initial, f"Expected initial state 0x{expected_initial:02X}, got 0x{int(dut.uo_out.value):02X}"
     dut._log.info("✅ Initial state correct")
     
     # Test 2: Send packet to channel 0
