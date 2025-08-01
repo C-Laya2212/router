@@ -1,292 +1,122 @@
-`timescale 1ns/1ps
+/*
+ * Copyright (c) 2025 Laya
+ * SPDX-License-Identifier: Apache-2.0
+ */
+`default_nettype none
 
 module tt_um_example (
-    input  wire [7:0] ui_in,    // Dedicated inputs
-    output wire [7:0] uo_out,   // Dedicated outputs
-    input  wire [7:0] uio_in,   // IOs: Input path
-    output wire [7:0] uio_out,  // IOs: Output path
-    output wire [7:0] uio_oe,   // IOs: Enable path (active high: 0=input, 1=output)
-    input  wire       ena,      // always 1 when the design is powered, so you can ignore it
-    input  wire       clk,      // clock
-    input  wire       rst_n     // reset_n - low to reset
+    input  wire [7:0] ui_in,
+    output wire [7:0] uo_out,
+    input  wire [7:0] uio_in,
+    output wire [7:0] uio_out,
+    output wire [7:0] uio_oe,
+    input  wire       ena,
+    input  wire       clk,
+    input  wire       rst_n
 );
+    wire pkt_v = ui_in[0];
+    wire [7:0] din = ui_in & 8'hFE;
+    wire [2:0] read_en = uio_in[2:0];
 
-    // Router signals - 3 channels but minimal
-    wire [2:0] vldout;
+    wire [2:0] vld;
     wire err, busy;
-    wire [7:0] data_out_0, data_out_1, data_out_2;
-    
-    // FIXED: Correct input mapping
-    wire packet_valid = ui_in[0];              // packet_valid from bit 0
-    wire [7:0] datain = ui_in;                 // Use full input data
-    
-    // Read enables from uio_in (only when used as inputs)
-    wire [2:0] read_enb = uio_in[2:0];
-    
-    // Instantiate ultra-compact router
-    router_ultra_compact router_inst (
-        .clk(clk),
-        .resetn(rst_n),
-        .packet_valid(packet_valid),
-        .read_enb(read_enb),
-        .datain(datain),
-        .vldout(vldout),
-        .err(err),
-        .busy(busy),
-        .data_out_0(data_out_0),
-        .data_out_1(data_out_1),
-        .data_out_2(data_out_2)
-    );
-    
-    // Output mapping to match test.py expectations
-    assign uo_out = {3'b000, vldout[2], vldout[1], vldout[0], err, busy};
-    
-    // Channel 0 data output on uio_out (full 8 bits available for data)
-    assign uio_out = data_out_0; // Full channel 0 data
-    assign uio_oe = 8'b11111000; // uio[7:3] as outputs, uio[2:0] as inputs for read enables
-    
-    // Unused signal to prevent warnings
-    wire _unused = &{ena, uio_in[7:3], data_out_1, data_out_2, 1'b0};
+    wire [7:0] dout0, dout1, dout2;
 
+    router core (
+        .clk(clk), .rst_n(rst_n),
+        .pkt_v(pkt_v), .din(din),
+        .read_en(read_en),
+        .vld(vld), .err(err), .busy(busy),
+        .dout0(dout0), .dout1(dout1), .dout2(dout2)
+    );
+
+    assign uo_out = {3'b000, vld, err, busy};
+    assign uio_out = dout0;
+    assign uio_oe  = 8'b11111000;
+
+    wire _unused = &{ena, uio_in[7:3], dout1, dout2, 1'b0};
 endmodule
 
-// FIXED: Ultra-compact 3-channel router with corrected logic
-module router_ultra_compact(
-    input clk, resetn, packet_valid,
-    input [2:0] read_enb,
-    input [7:0] datain, 
-    output [2:0] vldout,
-    output reg err, busy,
-    output [7:0] data_out_0, data_out_1, data_out_2
+module router (
+    input  wire        clk, rst_n, pkt_v,
+    input  wire [7:0]  din,
+    input  wire [2:0]  read_en,
+    output reg  [2:0]  vld,
+    output reg         err, busy,
+    output wire [7:0]  dout0, dout1, dout2
 );
+    localparam MAXDEPTH = 4;
+    reg [7:0] fifo0 [0:MAXDEPTH-1], fifo1 [0:MAXDEPTH-1], fifo2 [0:MAXDEPTH-1];
+    reg [1:0] wr0, wr1, wr2, rd0, rd1, rd2;
+    reg [2:0] cnt0, cnt1, cnt2;
 
-    // Minimal state machine - 3 states
-    reg [1:0] state;
-    localparam IDLE = 2'b00, LOAD = 2'b01, CHECK = 2'b10;
-    
-    // Ultra-small FIFOs - depth 4
-    reg [7:0] fifo_0 [0:3], fifo_1 [0:3], fifo_2 [0:3];
-    reg [1:0] wr_ptr_0, wr_ptr_1, wr_ptr_2;
-    reg [1:0] rd_ptr_0, rd_ptr_1, rd_ptr_2;
-    reg [2:0] count_0, count_1, count_2;
-    
-    // Registers for packet processing
+    // packet state
     reg [7:0] header;
-    reg [1:0] dest_channel;
-    reg [3:0] data_bytes_expected;
-    reg [3:0] data_bytes_received;
-    reg [7:0] calc_parity, recv_parity;
-    reg expecting_parity;
-    reg packet_started;
+    reg [3:0] len_expected, len_cnt;
+    reg [7:0] parity_acc;
+    reg expecting_parity, pkt_active;
 
-    // FIXED: Extract actual data from datain (remove packet_valid bit)
-    wire [7:0] actual_data = {datain[7:1], 1'b0};
+    wire [1:0] ch = header[1:0];
+    wire [7:0] data = din;
+    wire valid_ch = (ch <= 2);
 
-    // Channel decode from address bits [1:0]
-    always @(*) begin
-        dest_channel = header[1:0];
+    // header and payload handling
+    always @(posedge clk) begin
+        if (!rst_n) begin
+            header <= 0; len_expected <= 0; len_cnt <= 0;
+            parity_acc <= 0; expecting_parity <= 0; pkt_active <= 0;
+            err <= 0; busy <= 0;
+        end else begin
+            if (!pkt_active && pkt_v) begin
+                header <= data;
+                len_expected <= data[5:2];
+                parity_acc <= data;
+                len_cnt <= 0;
+                expecting_parity <= 0;
+                pkt_active <= 1;
+                busy <= 1;
+                err <= 0;
+            end else if (pkt_active && pkt_v) begin
+                if (!expecting_parity && len_cnt < len_expected) begin
+                    parity_acc <= parity_acc ^ data;
+                    len_cnt <= len_cnt + 1;
+                    if (len_cnt + 1 == len_expected) expecting_parity <= 1;
+                    if (valid_ch) begin
+                        case (ch)
+                            2'd0: if (cnt0<MAXDEPTH) fifo0[wr0] <= data;
+                            2'd1: if (cnt1<MAXDEPTH) fifo1[wr1] <= data;
+                            2'd2: if (cnt2<MAXDEPTH) fifo2[wr2] <= data;
+                        endcase
+                    end
+                end else if (expecting_parity) begin
+                    err <= (parity_acc != data);
+                    pkt_active <= 0;
+                    busy <= 0;
+                end
+            end
+        end
     end
 
-    // Variables for FIFO write control
-    reg write_fifo_0, write_fifo_1, write_fifo_2;
-    reg [7:0] write_data;
-
-    // FIXED: FIFO write logic - use actual_data for data bytes
-    always @(*) begin
-        write_fifo_0 = 1'b0;
-        write_fifo_1 = 1'b0;
-        write_fifo_2 = 1'b0;
-        write_data = actual_data;  // Use the cleaned data
-        
-        // Only write data bytes (not header, not parity)
-        if (state == LOAD && packet_valid && packet_started && !expecting_parity) begin
-            case (dest_channel)
-                2'b00: write_fifo_0 = (count_0 < 4) && (data_bytes_received < data_bytes_expected);
-                2'b01: write_fifo_1 = (count_1 < 4) && (data_bytes_received < data_bytes_expected);
-                2'b10: write_fifo_2 = (count_2 < 4) && (data_bytes_received < data_bytes_expected);
-                default: begin
-                    // Invalid channel - don't write
-                end
+    always @(posedge clk) if (rst_n) begin
+        if (pkt_active && pkt_v && !expecting_parity && len_cnt <= len_expected && valid_ch) begin
+            case (ch)
+                2'd0: if (cnt0<MAXDEPTH) begin wr0 <= wr0 + 1; cnt0 <= cnt0 + 1; end
+                2'd1: if (cnt1<MAXDEPTH) begin wr1 <= wr1 + 1; cnt1 <= cnt1 + 1; end
+                2'd2: if (cnt2<MAXDEPTH) begin wr2 <= wr2 + 1; cnt2 <= cnt2 + 1; end
             endcase
         end
+        if (read_en[0] && cnt0 > 0) begin rd0 <= rd0 + 1; cnt0 <= cnt0 - 1; end
+        if (read_en[1] && cnt1 > 0) begin rd1 <= rd1 + 1; cnt1 <= cnt1 - 1; end
+        if (read_en[2] && cnt2 > 0) begin rd2 <= rd2 + 1; cnt2 <= cnt2 - 1; end
     end
 
-    // FIXED: Main state machine with proper packet handling
-    always @(posedge clk) begin
-        if (!resetn) begin
-            state <= IDLE;
-            busy <= 1'b0;
-            err <= 1'b0;
-            expecting_parity <= 1'b0;
-            packet_started <= 1'b0;
-            calc_parity <= 8'h00;
-            data_bytes_expected <= 4'h0;
-            data_bytes_received <= 4'h0;
-            header <= 8'h00;
-        end
-        else begin
-            case (state)
-            IDLE: begin
-                busy <= 1'b0;
-                err <= 1'b0;
-                packet_started <= 1'b0;
-                data_bytes_received <= 4'h0;
-                if (packet_valid) begin
-                    // FIXED: Store actual header data (remove packet_valid bit)
-                    header <= actual_data;
-                    data_bytes_expected <= actual_data[5:2]; // Extract length from clean header
-                    calc_parity <= actual_data; // Start parity with clean header
-                    state <= LOAD;
-                    busy <= 1'b1;
-                    expecting_parity <= 1'b0;
-                    packet_started <= 1'b1;
-                    $display("IDLE->LOAD: Header=0x%02h, Length=%0d, Channel=%0d", 
-                             actual_data, actual_data[5:2], actual_data[1:0]);
-                end
-            end
-            
-            LOAD: begin
-                if (packet_valid) begin
-                    if (expecting_parity) begin
-                        // This is the parity byte - use actual_data
-                        recv_parity <= actual_data;
-                        state <= CHECK;
-                        $display("LOAD->CHECK: Received parity=0x%02h, Calc=0x%02h", actual_data, calc_parity);
-                    end
-                    else if (data_bytes_received < data_bytes_expected) begin
-                        // This is a data byte - use actual_data
-                        calc_parity <= calc_parity ^ actual_data;
-                        data_bytes_received <= data_bytes_received + 1;
-                        $display("LOAD: Data=0x%02h, Received=%0d/%0d", actual_data, data_bytes_received + 1, data_bytes_expected);
-                        
-                        // Check if this was the last data byte
-                        if (data_bytes_received == data_bytes_expected - 1) begin
-                            expecting_parity <= 1'b1;
-                        end
-                    end
-                    else begin
-                        // Should not reach here - unexpected data
-                        state <= IDLE;
-                        err <= 1'b1;
-                        $display("LOAD->IDLE: Unexpected data byte");
-                    end
-                end
-                else begin
-                    // Packet ended unexpectedly
-                    state <= IDLE;
-                    err <= 1'b1;
-                    $display("LOAD->IDLE: Packet ended unexpectedly");
-                end
-            end
-            
-            CHECK: begin
-                if (calc_parity == recv_parity) begin
-                    err <= 1'b0;
-                    $display("CHECK: Parity OK (calc=0x%02h, recv=0x%02h)", calc_parity, recv_parity);
-                end else begin
-                    err <= 1'b1;
-                    $display("CHECK: Parity ERROR (calc=0x%02h, recv=0x%02h)", calc_parity, recv_parity);
-                end
-                state <= IDLE;
-            end
-            
-            default: state <= IDLE;
-            endcase
-        end
+    assign dout0 = cnt0 > 0 ? fifo0[rd0] : 8'd0;
+    assign dout1 = cnt1 > 0 ? fifo1[rd1] : 8'd0;
+    assign dout2 = cnt2 > 0 ? fifo2[rd2] : 8'd0;
+
+    always @* begin
+        vld[0] = cnt0 > 0;
+        vld[1] = cnt1 > 0;
+        vld[2] = cnt2 > 0;
     end
-
-    // FIFO management - same as before
-    always @(posedge clk) begin
-        if (!resetn) begin
-            // Initialize all pointers and counters
-            wr_ptr_0 <= 2'b00;
-            wr_ptr_1 <= 2'b00;
-            wr_ptr_2 <= 2'b00;
-            rd_ptr_0 <= 2'b00; 
-            rd_ptr_1 <= 2'b00; 
-            rd_ptr_2 <= 2'b00;
-            count_0 <= 3'b000; 
-            count_1 <= 3'b000; 
-            count_2 <= 3'b000;
-            
-            // Initialize FIFO contents to prevent X states
-            fifo_0[0] <= 8'h00; fifo_0[1] <= 8'h00; fifo_0[2] <= 8'h00; fifo_0[3] <= 8'h00;
-            fifo_1[0] <= 8'h00; fifo_1[1] <= 8'h00; fifo_1[2] <= 8'h00; fifo_1[3] <= 8'h00;
-            fifo_2[0] <= 8'h00; fifo_2[1] <= 8'h00; fifo_2[2] <= 8'h00; fifo_2[3] <= 8'h00;
-        end
-        else begin
-            // FIFO 0 operations
-            if (write_fifo_0 && read_enb[0] && count_0 > 0) begin
-                // Simultaneous read and write
-                fifo_0[wr_ptr_0] <= write_data;
-                wr_ptr_0 <= wr_ptr_0 + 1;
-                rd_ptr_0 <= rd_ptr_0 + 1;
-                $display("FIFO0: Simultaneous R/W, data=0x%02h", write_data);
-            end
-            else if (write_fifo_0) begin
-                // Write only
-                fifo_0[wr_ptr_0] <= write_data;
-                wr_ptr_0 <= wr_ptr_0 + 1;
-                count_0 <= count_0 + 1;
-                $display("FIFO0: Write data=0x%02h, count=%0d->%0d", write_data, count_0, count_0+1);
-            end
-            else if (read_enb[0] && count_0 > 0) begin
-                // Read only
-                rd_ptr_0 <= rd_ptr_0 + 1;
-                count_0 <= count_0 - 1;
-                $display("FIFO0: Read data=0x%02h, count=%0d->%0d", fifo_0[rd_ptr_0], count_0, count_0-1);
-            end
-            
-            // FIFO 1 operations
-            if (write_fifo_1 && read_enb[1] && count_1 > 0) begin
-                fifo_1[wr_ptr_1] <= write_data;
-                wr_ptr_1 <= wr_ptr_1 + 1;
-                rd_ptr_1 <= rd_ptr_1 + 1;
-            end
-            else if (write_fifo_1) begin
-                fifo_1[wr_ptr_1] <= write_data;
-                wr_ptr_1 <= wr_ptr_1 + 1;
-                count_1 <= count_1 + 1;
-                $display("FIFO1: Write data=0x%02h, count=%0d->%0d", write_data, count_1, count_1+1);
-            end
-            else if (read_enb[1] && count_1 > 0) begin
-                rd_ptr_1 <= rd_ptr_1 + 1;
-                count_1 <= count_1 - 1;
-            end
-            
-            // FIFO 2 operations
-            if (write_fifo_2 && read_enb[2] && count_2 > 0) begin
-                fifo_2[wr_ptr_2] <= write_data;
-                wr_ptr_2 <= wr_ptr_2 + 1;
-                rd_ptr_2 <= rd_ptr_2 + 1;
-            end
-            else if (write_fifo_2) begin
-                fifo_2[wr_ptr_2] <= write_data;
-                wr_ptr_2 <= wr_ptr_2 + 1;
-                count_2 <= count_2 + 1;
-                $display("FIFO2: Write data=0x%02h, count=%0d->%0d", write_data, count_2, count_2+1);
-            end
-            else if (read_enb[2] && count_2 > 0) begin
-                rd_ptr_2 <= rd_ptr_2 + 1;
-                count_2 <= count_2 - 1;
-            end
-        end
-    end
-
-    // Output assignments
-    assign data_out_0 = (count_0 > 0) ? fifo_0[rd_ptr_0] : 8'h00;
-    assign data_out_1 = (count_1 > 0) ? fifo_1[rd_ptr_1] : 8'h00;
-    assign data_out_2 = (count_2 > 0) ? fifo_2[rd_ptr_2] : 8'h00;
-    
-    assign vldout[0] = (count_0 > 0);
-    assign vldout[1] = (count_1 > 0);
-    assign vldout[2] = (count_2 > 0);
-
-    // Debug output for valid signals
-    always @(posedge clk) begin
-        if (vldout != 3'b000) begin
-            $display("VLDOUT: %3b, Counts: [%0d,%0d,%0d]", vldout, count_0, count_1, count_2);
-        end
-    end
-
 endmodule
