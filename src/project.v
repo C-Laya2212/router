@@ -16,12 +16,12 @@ module tt_um_example (
     wire err, busy;
     wire [7:0] data_out_0, data_out_1, data_out_2;
     
-    // Input mapping - FIXED: separate valid and data
-    wire packet_valid = uio_in[3];     // Use uio_in[3] for packet_valid
-    wire [7:0] datain = ui_in;         // Full 8-bit data input (no overlap)
+    // Input mapping to match test.py protocol
+    wire packet_valid = ui_in[0];          // ui[0] for packet valid
+    wire [7:0] datain = ui_in;             // Full 8-bit data input (test sends data+valid together)
     
     // Read enables from uio_in (only when used as inputs)
-    wire [2:0] read_enb = uio_in[2:0];
+    wire [2:0] read_enb = uio_in[2:0];     // uio[2:0] for read enables
     
     // Instantiate ultra-compact router
     router_ultra_compact router_inst (
@@ -38,13 +38,15 @@ module tt_um_example (
         .data_out_2(data_out_2)
     );
     
-    // Output mapping
+    // Output mapping to match test.py expectations
     assign uo_out = {3'b000, vldout[2], vldout[1], vldout[0], err, busy};
-    assign uio_out = data_out_0; // Only output channel 0 data due to pin limitations
-    assign uio_oe = 8'b11110000; // uio[7:4] as outputs, uio[3:0] as inputs for read enables + valid
+    
+    // Channel 0 data output on uio_out (full 8 bits available for data)
+    assign uio_out = data_out_0; // Full channel 0 data
+    assign uio_oe = 8'b11111000; // uio[7:3] as outputs, uio[2:0] as inputs for read enables
     
     // Unused signal to prevent warnings
-    wire _unused = &{ena, uio_in[7:4], data_out_1, data_out_2, 1'b0};
+    wire _unused = &{ena, uio_in[7:3], data_out_1, data_out_2, 1'b0};
 
 endmodule
 
@@ -103,7 +105,7 @@ module router_ultra_compact(
         end
     end
 
-    // Main state machine - FIXED
+    // Main state machine
     always @(posedge clk) begin
         if (!resetn) begin
             state <= IDLE;
@@ -163,7 +165,7 @@ module router_ultra_compact(
         end
     end
 
-    // FIFO management - FIXED with proper initialization and separate read/write
+    // FIFO management
     always @(posedge clk) begin
         if (!resetn) begin
             // Initialize all pointers and counters
@@ -245,7 +247,7 @@ module router_ultra_compact(
         end
     end
 
-    // Output assignments - FIXED to prevent latches
+    // Output assignments
     assign data_out_0 = (count_0 > 0) ? fifo_0[rd_ptr_0] : 8'h00;
     assign data_out_1 = (count_1 > 0) ? fifo_1[rd_ptr_1] : 8'h00;
     assign data_out_2 = (count_2 > 0) ? fifo_2[rd_ptr_2] : 8'h00;
