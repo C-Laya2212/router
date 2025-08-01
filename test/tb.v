@@ -426,72 +426,44 @@ module tb();
         end
     endtask
     
-    // Task to send a packet using test.py protocol
+    // FIXED: Task to send a packet using correct protocol
     task send_packet(input integer length);
         begin
             $display("%0t: Sending packet of %0d bytes", $time, length);
             
             for (i = 0; i < length; i = i + 1) begin
-                // Send full data byte with packet_valid=1 (matches test.py: header | 0x01)
-                ui_in = test_packet[i] | 8'b00000001; // Data + packet_valid=1
+                // FIXED: Send data in bits [7:1] with packet_valid in bit [0]
+                // This matches the router's expectation: actual_data = {datain[7:1], 1'b0}
+                ui_in = {test_packet[i], 1'b1}; // Data in [7:1], packet_valid=1 in [0]
                 @(posedge clk);
-                $display("%0t:   Byte[%0d] = 0x%02h", $time, i, test_packet[i]);
+                $display("%0t:   Byte[%0d] = 0x%02h (sent as 0x%02h)", $time, i, test_packet[i], ui_in);
             end
             
             ui_in = 8'b00000000; // Clear packet_valid
             @(posedge clk);
         end
     endtask
-    // Add these tasks to your tb.v file:
 
-// Task: Wait for router to become idle
-task wait_for_idle();
-    begin
-        while (busy) begin
-            @(posedge clk);
-        end
-        #20; // Additional settling time
-    end
-endtask
-
-// Task: Read from channel 0 (only channel accessible via pins)
-task read_channel_0();
-    begin
-        if (!vldout[0]) begin
-            // Just exit the task normally
-        end
-        else begin
-            $display("%0t: Reading from Channel 0:", $time);
-            uio_in = uio_in | 8'b00000001; // Enable read from channel 0 (set bit 0)
-            
-            while (vldout[0]) begin
+    // Task: Wait for router to become idle
+    task wait_for_idle();
+        begin
+            while (busy) begin
                 @(posedge clk);
-                $display("%0t:   Channel 0 data = 0x%02h", $time, data_out_0);
-                @(posedge clk); // Additional cycle for FIFO to update
             end
-            
-            uio_in = uio_in & 8'b11111110; // Disable read (clear bit 0)
+            #20; // Additional settling time
         end
-    end
-endtask
+    endtask
 
-// Task: Display final test results
-task display_test_results();
-    begin
-        $display("\n========================================");
-        $display("           TEST RESULTS SUMMARY         ");
-        $display("========================================");
-        $display("Total Tests:  %0d", test_count);
-        $display("Passed:       %0d", pass_count);
-        $display("Failed:       %0d", fail_count);
-        $display("Pass Rate:    %0d%%", (pass_count * 100) / test_count);
-        $display("========================================");
-        
-        if (fail_count == 0) begin
-            $display("🎉 ALL TESTS PASSED! Router is ready for TinyTapeout!");
-        end else begin
-            $display("⚠️  Some tests failed. Review the design.");
-        end
-    end
-endtask
-endmodule
+    // Task: Read from channel 0 (only channel accessible via pins)
+    task read_channel_0();
+        begin
+            if (!vldout[0]) begin
+                // Just exit the task normally
+            end
+            else begin
+                $display("%0t: Reading from Channel 0:", $time);
+                uio_in = uio_in | 8'b00000001; // Enable read from channel 0 (set bit 0)
+                
+                while (vldout[0]) begin
+                    @(posedge clk);
+                    $display("%0t:   Channel 0 data = 0x%02h", $time, data_out_0);
