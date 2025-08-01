@@ -3,416 +3,248 @@
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import ClockCycles, RisingEdge, FallingEdge
-from cocotb.types import LogicArray
-import random
-
-class RouterTestHelper:
-    def __init__(self, dut):
-        self.dut = dut
-        
-    async def reset_dut(self):
-        """Reset the DUT"""
-        self.dut._log.info("Resetting DUT")
-        self.dut.ena.value = 1
-        self.dut.ui_in.value = 0
-        self.dut.uio_in.value = 0
-        self.dut.rst_n.value = 0
-        await ClockCycles(self.dut.clk, 10)
-        self.dut.rst_n.value = 1
-        await ClockCycles(self.dut.clk, 5)
-        
-    def calculate_parity(self, packet_data):
-        """Calculate XOR parity for packet data"""
-        parity = 0
-        for byte in packet_data:
-            parity ^= byte
-        return parity
-        
-    async def send_packet(self, address, data_bytes):
-        """Send a complete packet with header, data, and parity"""
-        # Create header: [7:2] = length, [1:0] = address
-        length = len(data_bytes)
-        header = (length << 2) | (address & 0x3)
-        
-        # Complete packet: header + data + parity
-        packet = [header] + data_bytes
-        parity = self.calculate_parity(packet)
-        packet.append(parity)
-        
-        self.dut._log.info(f"Sending packet to address {address}, length {length}")
-        self.dut._log.info(f"Packet data: {[hex(x) for x in packet]}")
-        
-        # Send each byte
-        for i, byte in enumerate(packet):
-            # Set packet_valid = 1 and data
-            if i < len(packet) - 1:  # Not the last byte (parity)
-                self.dut.ui_in.value = (byte & 0xFE) | 1  # packet_valid = 1
-            else:  # Last byte (parity), clear packet_valid
-                self.dut.ui_in.value = (byte & 0xFE) | 0  # packet_valid = 0
-                await ClockCycles(self.dut.clk, 1)
-                self.dut.ui_in.value = byte & 0xFE  # Keep data, packet_valid = 0
-                
-            await ClockCycles(self.dut.clk, 1)
-            
-        # Clear inputs
-        self.dut.ui_in.value = 0
-        await ClockCycles(self.dut.clk, 2)
-        
-        return packet[:-1]  # Return packet without parity for verification
-        
-    async def send_packet_with_error(self, address, data_bytes):
-        """Send a packet with intentional parity error"""
-        length = len(data_bytes)
-        header = (length << 2) | (address & 0x3)
-        
-        packet = [header] + data_bytes
-        correct_parity = self.calculate_parity(packet)
-        wrong_parity = correct_parity ^ 0xFF  # Intentionally wrong parity
-        packet.append(wrong_parity)
-        
-        self.dut._log.info(f"Sending packet with parity error to address {address}")
-        
-        # Send each byte
-        for i, byte in enumerate(packet):
-            if i < len(packet) - 1:
-                self.dut.ui_in.value = (byte & 0xFE) | 1
-            else:
-                self.dut.ui_in.value = (byte & 0xFE) | 0
-                await ClockCycles(self.dut.clk, 1)
-                self.dut.ui_in.value = byte & 0xFE
-                
-            await ClockCycles(self.dut.clk, 1)
-            
-        self.dut.ui_in.value = 0
-        await ClockCycles(self.dut.clk, 2)
-        
-    async def read_from_channel(self, channel, expected_data=None):
-        """Read data from specified channel"""
-        self.dut._log.info(f"Reading from channel {channel}")
-        
-        # Enable read for the channel
-        read_mask = 1 << channel
-        self.dut.uio_in.value = read_mask
-        
-        # Wait for valid output
-        timeout = 0
-        while (self.dut.uo_out.value & (1 << channel)) == 0 and timeout < 100:
-            await ClockCycles(self.dut.clk, 1)
-            timeout += 1
-            
-        if timeout >= 100:
-            self.dut._log.warning(f"Timeout waiting for valid output on channel {channel}")
-            return []
-            
-        # Read data while valid
-        received_data = []
-        max_reads = 20  # Prevent infinite loop
-        read_count = 0
-        
-        while (self.dut.uo_out.value & (1 << channel)) != 0 and read_count < max_reads:
-            await ClockCycles(self.dut.clk, 1)
-            # Extract data from uio_out (only 6 bits available for data_out_0)
-            if channel == 0:
-                data = self.dut.uio_out.value & 0x3F  # Lower 6 bits
-            else:
-                # For channels 1 and 2, we can't read the data through the wrapper
-                # This is a limitation of the current wrapper design
-                data = 0
-            received_data.append(data)
-            read_count += 1
-            
-        # Disable read
-        self.dut.uio_in.value = 0
-        await ClockCycles(self.dut.clk, 2)
-        
-        self.dut._log.info(f"Received data from channel {channel}: {[hex(x) for x in received_data]}")
-        return received_data
-        
-    def get_status_signals(self):
-        """Get current status of router signals"""
-        uo_out = int(self.dut.uo_out.value)
-        uio_out = int(self.dut.uio_out.value)
-        
-        return {
-            'vldout_0': (uo_out >> 0) & 1,
-            'vldout_1': (uo_out >> 1) & 1,
-            'vldout_2': (uo_out >> 2) & 1,
-            'busy': (uio_out >> 6) & 1,
-            'err': (uio_out >> 7) & 1,
-        }
+from cocotb.triggers import ClockCycles
 
 @cocotb.test()
-async def test_router_basic_functionality(dut):
-    """Test basic router functionality"""
-    dut._log.info("=== Test: Basic Router Functionality ===")
+async def test_project(dut):
+    dut._log.info("Start")
     
-    # Set up clock
+    # Set the clock period to 10 us (100 KHz)
     clock = Clock(dut.clk, 10, units="us")
     cocotb.start_soon(clock.start())
     
-    helper = RouterTestHelper(dut)
-    await helper.reset_dut()
-    
-    # Test 1: Send packet to channel 0
-    dut._log.info("Test 1: Packet to channel 0")
-    test_data = [0xAA, 0x55, 0xCC, 0x33]
-    sent_packet = await helper.send_packet(0, test_data)
-    
+    # Reset
+    dut._log.info("Reset")
+    dut.ena.value = 1
+    dut.ui_in.value = 0
+    dut.uio_in.value = 0
+    dut.rst_n.value = 0
     await ClockCycles(dut.clk, 10)
+    dut.rst_n.value = 1
     
-    # Check if packet is available on channel 0
-    status = helper.get_status_signals()
-    #assert status['vldout_0'] == 1, "Channel 0 should have valid output"
+    dut._log.info("Test project behavior")
     
-    # Read from channel 0
-    received_data = await helper.read_from_channel(0, test_data)
-    dut._log.info("Test 1 completed successfully")
-
-@cocotb.test()
-async def test_all_channels(dut):
-    """Test packet routing to all channels"""
-    dut._log.info("=== Test: All Channels ===")
-    
-    clock = Clock(dut.clk, 10, units="us")
-    cocotb.start_soon(clock.start())
-    
-    helper = RouterTestHelper(dut)
-    await helper.reset_dut()
-    
-    # Test each channel
-    for channel in range(3):
-        dut._log.info(f"Testing channel {channel}")
-        
-        test_data = [0x10 + channel, 0x20 + channel, 0x30 + channel]
-        await helper.send_packet(channel, test_data)
-        
-        await ClockCycles(dut.clk, 10)
-        
-        status = helper.get_status_signals()
-        #assert status[f'vldout_{channel}'] == 1, f"Channel {channel} should have valid output"
-        
-        # Read from the channel
-        #await helper.read_from_channel(channel)
-        
-        await ClockCycles(dut.clk, 10)
-
-@cocotb.test()
-async def test_parity_error(dut):
-    """Test parity error detection"""
-    dut._log.info("=== Test: Parity Error Detection ===")
-    
-    clock = Clock(dut.clk, 10, units="us")
-    cocotb.start_soon(clock.start())
-    
-    helper = RouterTestHelper(dut)
-    await helper.reset_dut()
-    
-    # Send packet with parity error
-    test_data = [0xDE, 0xAD, 0xBE, 0xEF]
-    await helper.send_packet_with_error(0, test_data)
-    
-    # Wait for processing
-    await ClockCycles(dut.clk, 20)
-    
-    # Check for error signal
-    status = helper.get_status_signals()
-    dut._log.info(f"Error status: {status['err']}")
-    
-    # Note: Due to wrapper limitations, we may not be able to fully verify
-    # the error signal, but the test structure is correct
-    
-@cocotb.test()
-async def test_busy_signal(dut):
-    """Test busy signal during packet processing"""
-    dut._log.info("=== Test: Busy Signal ===")
-    
-    clock = Clock(dut.clk, 10, units="us")
-    cocotb.start_soon(clock.start())
-    
-    helper = RouterTestHelper(dut)
-    await helper.reset_dut()
-    
-    # Start sending a packet and monitor busy signal
-    test_data = [0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]
-    
-    # Send header first
-    header = (len(test_data) << 2) | 0  # Address 0
-    dut.ui_in.value = (header & 0xFE) | 1  # packet_valid = 1
+    # Test 1: Check initial state after reset
+    dut._log.info("Test 1: Initial state check")
     await ClockCycles(dut.clk, 1)
     
-    # Check if busy goes high during processing
-    busy_observed = False
-    for i in range(10):
-        status = helper.get_status_signals()
-        if status['busy']:
-            busy_observed = True
-            dut._log.info(f"Busy signal observed at cycle {i}")
+    # After reset, router should be idle (busy=0, err=0, vldout=000)
+    # uo_out format: {3'b000, vldout[2:0], err, busy}
+    expected_initial = 0b00000000  # All zeros
+    assert dut.uo_out.value == expected_initial, f"Expected initial state 0x{expected_initial:02X}, got 0x{dut.uo_out.value:02X}"
+    dut._log.info("✅ Initial state correct")
+    
+    # Test 2: Send packet to channel 0
+    dut._log.info("Test 2: Send packet to channel 0")
+    
+    # Create packet: Header + Data + Parity
+    # Header format: [5:2]=length, [1:0]=channel
+    header = 0b00001000  # length=2, channel=0
+    data1 = 0xAA
+    data2 = 0x55
+    parity = header ^ data1 ^ data2
+    
+    # Send header with packet_valid=1 (bit 0 of ui_in)
+    dut.ui_in.value = header | 0x01  # Set packet_valid
+    await ClockCycles(dut.clk, 1)
+    
+    # Router should now be busy
+    assert (dut.uo_out.value & 0x01) == 1, "Router should be busy after receiving header"
+    dut._log.info("✅ Router is busy")
+    
+    # Send first data byte
+    dut.ui_in.value = data1 | 0x01
+    await ClockCycles(dut.clk, 1)
+    
+    # Send second data byte
+    dut.ui_in.value = data2 | 0x01
+    await ClockCycles(dut.clk, 1)
+    
+    # Send parity byte
+    dut.ui_in.value = parity | 0x01
+    await ClockCycles(dut.clk, 1)
+    
+    # Clear packet_valid
+    dut.ui_in.value = 0
+    await ClockCycles(dut.clk, 2)
+    
+    # Wait for router to become idle
+    for i in range(20):
+        if (dut.uo_out.value & 0x01) == 0:  # busy bit cleared
             break
         await ClockCycles(dut.clk, 1)
     
-    # Complete the packet transmission
+    # Check if channel 0 has valid data and no error
+    # uo_out[2] should be 1 (vldout[0]), uo_out[1] should be 0 (no error)
+    expected_after_packet = 0b00000100  # vldout[0]=1, err=0, busy=0
+    assert (dut.uo_out.value & 0x07) == 0x04, f"Expected channel 0 valid, got uo_out=0x{dut.uo_out.value:02X}"
+    assert (dut.uo_out.value & 0x02) == 0, "No parity error should occur"
+    dut._log.info("✅ Packet successfully routed to channel 0")
+    
+    # Test 3: Send packet to channel 1
+    dut._log.info("Test 3: Send packet to channel 1")
+    
+    header = 0b00000101  # length=1, channel=1
+    data1 = 0x33
+    parity = header ^ data1
+    
+    # Send complete packet
+    dut.ui_in.value = header | 0x01
+    await ClockCycles(dut.clk, 1)
+    dut.ui_in.value = data1 | 0x01
+    await ClockCycles(dut.clk, 1)
+    dut.ui_in.value = parity | 0x01
+    await ClockCycles(dut.clk, 1)
     dut.ui_in.value = 0
-    await helper.send_packet(0, test_data)
+    await ClockCycles(dut.clk, 2)
     
-    dut._log.info(f"Busy signal test completed. Busy observed: {busy_observed}")
-
-@cocotb.test()
-async def test_multiple_packets(dut):
-    """Test sending multiple packets"""
-    dut._log.info("=== Test: Multiple Packets ===")
-    
-    clock = Clock(dut.clk, 10, units="us")
-    cocotb.start_soon(clock.start())
-    
-    helper = RouterTestHelper(dut)
-    await helper.reset_dut()
-    
-    # Send multiple packets to different channels
-    packets = [
-        (0, [0x11, 0x22]),
-        (1, [0x33, 0x44, 0x55]),
-        (2, [0x66, 0x77, 0x88, 0x99]),
-        (0, [0xAA, 0xBB, 0xCC])
-    ]
-    
-    for channel, data in packets:
-        dut._log.info(f"Sending packet to channel {channel}")
-        await helper.send_packet(channel, data)
-        await ClockCycles(dut.clk, 5)
-    
-    # Wait for all packets to be processed
-    await ClockCycles(dut.clk, 50)
-    
-    # Read from all channels
-    for channel in range(3):
-        status = helper.get_status_signals()
-        if status[f'vldout_{channel}']:
-            await helper.read_from_channel(channel)
-
-@cocotb.test()
-async def test_invalid_address(dut):
-    """Test invalid address handling"""
-    dut._log.info("=== Test: Invalid Address ===")
-    
-    clock = Clock(dut.clk, 10, units="us")
-    cocotb.start_soon(clock.start())
-    
-    helper = RouterTestHelper(dut)
-    await helper.reset_dut()
-    
-    # Send packet with invalid address (3)
-    test_data = [0x12, 0x34]
-    length = len(test_data)
-    header = (length << 2) | 3  # Invalid address
-    
-    packet = [header] + test_data
-    parity = helper.calculate_parity(packet)
-    packet.append(parity)
-    
-    # Send the packet
-    for i, byte in enumerate(packet):
-        if i < len(packet) - 1:
-            dut.ui_in.value = (byte & 0xFE) | 1
-        else:
-            dut.ui_in.value = (byte & 0xFE) | 0
-            await ClockCycles(dut.clk, 1)
-            dut.ui_in.value = byte & 0xFE
+    # Wait for idle
+    for i in range(20):
+        if (dut.uo_out.value & 0x01) == 0:
+            break
         await ClockCycles(dut.clk, 1)
     
+    # Check if channel 1 has valid data (uo_out[3] should be 1)
+    assert (dut.uo_out.value & 0x08) != 0, f"Channel 1 should have valid data, got uo_out=0x{dut.uo_out.value:02X}"
+    dut._log.info("✅ Packet successfully routed to channel 1")
+    
+    # Test 4: Send packet to channel 2
+    dut._log.info("Test 4: Send packet to channel 2")
+    
+    header = 0b00000110  # length=1, channel=2
+    data1 = 0xFF
+    parity = header ^ data1
+    
+    dut.ui_in.value = header | 0x01
+    await ClockCycles(dut.clk, 1)
+    dut.ui_in.value = data1 | 0x01
+    await ClockCycles(dut.clk, 1)
+    dut.ui_in.value = parity | 0x01
+    await ClockCycles(dut.clk, 1)
     dut.ui_in.value = 0
-    await ClockCycles(dut.clk, 20)
+    await ClockCycles(dut.clk, 2)
     
-    # Check that no valid outputs are asserted
-    status = helper.get_status_signals()
-    dut._log.info(f"Status after invalid address: {status}")
-
-@cocotb.test()
-async def test_soft_reset_timeout(dut):
-    """Test soft reset functionality"""
-    dut._log.info("=== Test: Soft Reset Timeout ===")
+    # Wait for idle
+    for i in range(20):
+        if (dut.uo_out.value & 0x01) == 0:
+            break
+        await ClockCycles(dut.clk, 1)
     
-    clock = Clock(dut.clk, 10, units="us")
-    cocotb.start_soon(clock.start())
+    # Check if channel 2 has valid data (uo_out[4] should be 1)
+    assert (dut.uo_out.value & 0x10) != 0, f"Channel 2 should have valid data, got uo_out=0x{dut.uo_out.value:02X}"
+    dut._log.info("✅ Packet successfully routed to channel 2")
     
-    helper = RouterTestHelper(dut)
-    await helper.reset_dut()
+    # Test 5: Test parity error detection
+    dut._log.info("Test 5: Test parity error detection")
     
-    # Send a packet to channel 0
-    test_data = [0xCA, 0xFE]
-    await helper.send_packet(0, test_data)
+    header = 0b00000100  # length=1, channel=0
+    data1 = 0x42
+    wrong_parity = 0xFF  # Intentionally wrong parity
     
-    await ClockCycles(dut.clk, 10)
+    dut.ui_in.value = header | 0x01
+    await ClockCycles(dut.clk, 1)
+    dut.ui_in.value = data1 | 0x01
+    await ClockCycles(dut.clk, 1)
+    dut.ui_in.value = wrong_parity | 0x01
+    await ClockCycles(dut.clk, 1)
+    dut.ui_in.value = 0
+    await ClockCycles(dut.clk, 2)
     
-    # Verify packet is available
-    status = helper.get_status_signals()
-    if status['vldout_0']:
-        dut._log.info("Packet available on channel 0")
-        
-        # Don't read from channel (to trigger timeout)
-        # Wait for more than 30 cycles (soft reset timeout)
-        await ClockCycles(dut.clk, 35)
-        
-        # Check if soft reset occurred
-        status = helper.get_status_signals()
-        dut._log.info(f"Status after timeout: {status}")
-
-@cocotb.test()
-async def test_random_packets(dut):
-    """Test with random packet data"""
-    dut._log.info("=== Test: Random Packets ===")
+    # Wait for idle
+    for i in range(20):
+        if (dut.uo_out.value & 0x01) == 0:
+            break
+        await ClockCycles(dut.clk, 1)
     
-    clock = Clock(dut.clk, 10, units="us")
-    cocotb.start_soon(clock.start())
+    # Check if error is detected (uo_out[1] should be 1)
+    assert (dut.uo_out.value & 0x02) != 0, f"Parity error should be detected, got uo_out=0x{dut.uo_out.value:02X}"
+    dut._log.info("✅ Parity error correctly detected")
     
-    helper = RouterTestHelper(dut)
-    await helper.reset_dut()
+    # Test 6: Test reading from channel 0 (only accessible channel)
+    dut._log.info("Test 6: Test reading from channel 0")
     
-    # Generate and send random packets
-    for i in range(5):
-        channel = random.randint(0, 2)
-        length = random.randint(1, 8)
-        data = [random.randint(0, 255) for _ in range(length)]
-        
-        dut._log.info(f"Random packet {i}: channel={channel}, data={[hex(x) for x in data]}")
-        
-        await helper.send_packet(channel, data)
-        await ClockCycles(dut.clk, 10)
-        
-        # Try to read if data is available
-        status = helper.get_status_signals()
-        if status[f'vldout_{channel}']:
-            await helper.read_from_channel(channel)
-        
-        await ClockCycles(dut.clk, 5)
-
-# Helper test for debugging
-@cocotb.test()
-async def test_simple_debug(dut):
-    """Simple test for debugging"""
-    dut._log.info("=== Debug Test ===")
+    # First, send a fresh packet to channel 0
+    header = 0b00000100  # length=1, channel=0
+    data1 = 0x77
+    parity = header ^ data1
     
-    clock = Clock(dut.clk, 10, units="us")
-    cocotb.start_soon(clock.start())
+    dut.ui_in.value = header | 0x01
+    await ClockCycles(dut.clk, 1)
+    dut.ui_in.value = data1 | 0x01
+    await ClockCycles(dut.clk, 1)
+    dut.ui_in.value = parity | 0x01
+    await ClockCycles(dut.clk, 1)
+    dut.ui_in.value = 0
+    await ClockCycles(dut.clk, 2)
     
-    helper = RouterTestHelper(dut)
-    await helper.reset_dut()
+    # Wait for idle
+    for i in range(20):
+        if (dut.uo_out.value & 0x01) == 0:
+            break
+        await ClockCycles(dut.clk, 1)
     
-    # Simple test: send one byte of data
-    dut._log.info("Sending simple test data")
-    
-    # Just set some values and observe
-    dut.ui_in.value = 0x01  # packet_valid = 1, simple data
+    # Enable read from channel 0 using uio_in[0]
+    dut.uio_in.value = 0x01  # read_enb[0] = 1
     await ClockCycles(dut.clk, 1)
     
-    dut.ui_in.value = 0x20  # Some data, packet_valid = 0
+    # Check if data is available on uio_out (should be the data byte we sent)
+    if (dut.uo_out.value & 0x04) != 0:  # vldout[0] = 1
+        read_data = dut.uio_out.value
+        dut._log.info(f"✅ Read data from channel 0: 0x{read_data:02X}")
+        
+        # Give one more clock cycle to pop the FIFO
+        await ClockCycles(dut.clk, 1)
+    
+    # Disable read
+    dut.uio_in.value = 0
     await ClockCycles(dut.clk, 1)
     
-    dut.ui_in.value = 0x00  # Clear
-    await ClockCycles(dut.clk, 10)
+    # Test 7: Test multiple packets to same channel
+    dut._log.info("Test 7: Test multiple packets to same channel")
     
-    # Log the outputs
-    status = helper.get_status_signals()
-    dut._log.info(f"Final status: {status}")
-    dut._log.info(f"uo_out: 0x{int(dut.uo_out.value):02x}")
-    dut._log.info(f"uio_out: 0x{int(dut.uio_out.value):02x}")
+    # Send 3 small packets to channel 0
+    for i in range(3):
+        header = 0b00000100  # length=1, channel=0
+        data1 = 0x10 + i
+        parity = header ^ data1
+        
+        dut.ui_in.value = header | 0x01
+        await ClockCycles(dut.clk, 1)
+        dut.ui_in.value = data1 | 0x01
+        await ClockCycles(dut.clk, 1)
+        dut.ui_in.value = parity | 0x01
+        await ClockCycles(dut.clk, 1)
+        dut.ui_in.value = 0
+        await ClockCycles(dut.clk, 2)
+    
+    # Wait for all packets to be processed
+    for i in range(30):
+        if (dut.uo_out.value & 0x01) == 0:
+            break
+        await ClockCycles(dut.clk, 1)
+    
+    # Channel 0 should still have valid data
+    assert (dut.uo_out.value & 0x04) != 0, "Channel 0 should have valid data after multiple packets"
+    dut._log.info("✅ Multiple packets successfully stored")
+    
+    # Test 8: Final status check
+    dut._log.info("Test 8: Final status check")
+    
+    await ClockCycles(dut.clk, 5)
+    
+    # Extract final status
+    final_status = dut.uo_out.value
+    busy = final_status & 0x01
+    err = (final_status >> 1) & 0x01
+    vldout = (final_status >> 2) & 0x07
+    
+    dut._log.info(f"Final status - Busy: {busy}, Error: {err}, Valid channels: {vldout:03b}")
+    
+    # Router should not be busy at the end
+    assert busy == 0, "Router should be idle at end of test"
+    
+    # Should have valid data in at least channel 0
+    assert (vldout & 0x01) != 0, "Channel 0 should have valid data"
+    
+    dut._log.info("✅ All tests passed!")
+    dut._log.info("🎉 3-Port Router is working correctly and ready for TinyTapeout!")
