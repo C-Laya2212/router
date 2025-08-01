@@ -433,7 +433,8 @@ module tb();
             
             for (i = 0; i < length; i = i + 1) begin
                 @(posedge clk);
-                ui_in = {test_packet[i][7:1], 1'b1}; // packet_valid = 1
+                ui_in = test_packet[i]; // Send full 8-bit data
+                ui_in[0] = 1'b1;        // Set packet_valid bit
                 $display("%0t:   Byte[%0d] = 0x%02h", $time, i, test_packet[i]);
             end
             
